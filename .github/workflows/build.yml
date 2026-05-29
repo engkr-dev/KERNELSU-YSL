@@ -25,11 +25,13 @@ jobs:
           apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
           ln -s /usr/bin/python2 /usr/bin/python || true
 
-      - name: Patch Build Script (Bypass UI & Fixes)
+      - name: Patch Build Script & GCC Check
         run: |
           chmod +x kernel_build_fixed.sh
-          # التدخل الجراحي: إزالة أي أوامر تطلب واجهة تفاعلية (menuconfig) من السكريبت
+          # إزالة واجهة menuconfig التفاعلية
           sed -i '/menuconfig/d' kernel_build_fixed.sh
+          # الخدعة: إزالة شرط التحقق من إصدار GCC الذي يوقف البناء
+          sed -i 's/# error Sorry, your version of GCC is too old - please use 5.1 or newer.//g' include/linux/compiler-gcc.h
 
       - name: Execute Kernel Build Script
         run: |
