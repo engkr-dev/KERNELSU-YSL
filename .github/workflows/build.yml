@@ -1,0 +1,38 @@
+name: Build ENGKR KSU-Next + SUSFS Kernel
+
+# هذا السطر يسمح لك بتشغيل البناء يدوياً بضغطة زر
+on:
+  workflow_dispatch:
+
+jobs:
+  build-kernel:
+    # استخدام أوبونتو 20.04 لأنه الأكثر استقراراً مع كيرنالات 4.9 القديمة
+    runs-on: ubuntu-20.04 
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v3
+
+      - name: Setup Build Environment (Dependencies)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2
+          sudo ln -s /usr/bin/python2 /usr/bin/python || true
+
+      - name: Grant Execute Permissions
+        run: |
+          chmod +x kernel_build_fixed.sh
+          chmod -R +x scripts/ || true
+          chmod -R +x AnyKernel3/ || true
+
+      - name: Execute Kernel Build Script
+        run: |
+          # تشغيل السكريبت الخاص بالمطور
+          ./kernel_build_fixed.sh
+
+      - name: Upload Kernel Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ENGKR-YSL-KSU-SUSFS-Kernel
+          # السكريبت غالباً سينتج ملف zip، سنقوم برفع أي ملف zip يتم إنشاؤه
+          path: ./*.zip
