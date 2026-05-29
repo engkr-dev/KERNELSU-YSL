@@ -7,7 +7,7 @@ on:
 jobs:
   build-kernel:
     # استخدام أوبونتو 20.04 لأنه الأكثر استقراراً مع كيرنالات 4.9 القديمة
-    runs-on: ubuntu-20.04 
+    runs-on: ubuntu-latest 
 
     steps:
       - name: Checkout Source Code
