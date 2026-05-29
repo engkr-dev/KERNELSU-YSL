@@ -25,7 +25,7 @@ jobs:
           apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
           ln -s /usr/bin/python2 /usr/bin/python || true
 
-      - name: The Ultimate Python Hack (Fixing KernelSU Constants)
+      - name: The Ultimate Python Hack (Carpet Bombing KSU Constants)
         run: |
           chmod +x kernel_build_fixed.sh
           # إزالة واجهة menuconfig
@@ -34,24 +34,29 @@ jobs:
           # إجبار مترجم GCC القديم
           sed -i 's/# error Sorry, your version of GCC is too old - please use 5.1 or newer.//g' include/linux/compiler-gcc.h
           
-          # حقن وتشغيل سكربت البايثون الجراحي
+          # سكربت البايثون الشامل (تم توسيع نطاق البحث ليشمل كامل المشروع)
           cat << 'EOF' > patch_ksu.py
           import os, re
-          for root, dirs, files in os.walk('drivers/kernelsu'):
+          # نبحث عن أي متغير يبدأ بـ KSU_ ومكتوب بصيغة static const
+          pattern = r'(?:static\s+)?const\s+[a-zA-Z0-9_ ]+\s+(KSU_[A-Z0-9_]+)\s*=\s*([^;]+);'
+          
+          # البحث في كامل ملفات المشروع دون استثناء
+          for root, dirs, files in os.walk('.'):
               for file in files:
                   if not file.endswith(('.c', '.h')): continue
                   path = os.path.join(root, file)
-                  with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                      content = f.read()
-                  
-                  # صيد كل الثوابت المعقدة وتحويلها إلى ماكرو بسيط
-                  pattern = r'(?:static\s+)?const\s+[a-zA-Z0-9_ ]+\s+(KSU_[A-Z0-9_]+)\s*=\s*([^;]+);'
-                  new_content = re.sub(pattern, r'#define \1 \2', content)
-                  
-                  if new_content != content:
-                      with open(path, 'w', encoding='utf-8') as f:
-                          f.write(new_content)
-                      print(f"Patched KSU Constants in: {path}")
+                  try:
+                      with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                          content = f.read()
+                      
+                      new_content = re.sub(pattern, r'#define \1 \2', content)
+                      
+                      if new_content != content:
+                          with open(path, 'w', encoding='utf-8') as f:
+                              f.write(new_content)
+                          print(f"Patched KSU Constants in: {path}")
+                  except Exception:
+                      pass
           EOF
           python3 patch_ksu.py
 
