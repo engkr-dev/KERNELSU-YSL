@@ -61,17 +61,20 @@ jobs:
           EOF
           python3 patch_ksu.py
 
-      - name: The ENGKR Hardware Backdoor (Qualcomm WCNSS MAC Spoofer)
+      - name: The ENGKR Hardware Backdoor (Smart Hunter-Seeker)
         run: |
           cat << 'EOF' > patch_mac_backdoor.py
           import os, re
           
-          print("--- INITIATING WCNSS KERNEL BACKDOOR INJECTION ---")
+          print("--- INITIATING SMART WCNSS KERNEL BACKDOOR INJECTION ---")
           
           backdoor_code = """
           // --- ENGKR GOD-MODE MAC BACKDOOR ---
+          #include <linux/module.h>
           u8 engkr_mac[6] = {0};
           int engkr_mac_set = 0;
+          EXPORT_SYMBOL(engkr_mac);
+          EXPORT_SYMBOL(engkr_mac_set);
           
           static ssize_t engkr_mac_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
               if (sscanf(buf, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
@@ -91,43 +94,50 @@ jobs:
                   try:
                       with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                           content = f.read()
-          
                       modified = False
           
-                      # 1. Patching Sysfs Node (wcnss_mac_addr_show)
-                      if 'wcnss_mac_addr_show' in content:
+                      # 1. صيد مسار اللعبة Sysfs واستخراج اسم الدالة برمجياً
+                      if 'wcnss_mac_addr' in content and 'DEVICE_ATTR' in content:
                           if 'engkr_mac_store' not in content:
-                              print(f"[*] Found SysFS Node in: {path}")
-                              content = re.sub(r'(static\s+ssize_t\s+wcnss_mac_addr_show)', backdoor_code + r'\n\1', content, count=1)
-                              content = re.sub(r'DEVICE_ATTR\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*wcnss_mac_addr_show\s*,\s*NULL\s*\)', 
-                                               r'DEVICE_ATTR(wcnss_mac_addr, 0664, wcnss_mac_addr_show, engkr_mac_store)', content)
-                              
-                              show_sig = re.search(r'static\s+ssize_t\s+wcnss_mac_addr_show\([^)]+\)\s*\{', content)
-                              if show_sig:
-                                  show_impl = show_sig.group(0) + """
+                              attr_match = re.search(r'DEVICE_ATTR(?:_RO|_RW)?\s*\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*([a-zA-Z0-9_]+)', content)
+                              if attr_match:
+                                  show_func = attr_match.group(1)
+                                  print(f"[*] Target Acquired! SysFS Node in: {path} -> Function: {show_func}")
+                                  
+                                  content = re.sub(rf'(static\s+ssize_t\s+{show_func})', backdoor_code + r'\n\1', content, count=1)
+                                  content = re.sub(r'DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*' + show_func + r'[^)]*\)', 
+                                                   r'DEVICE_ATTR(wcnss_mac_addr, 0664, ' + show_func + r', engkr_mac_store)', content)
+                                  
+                                  show_sig = re.search(rf'static\s+ssize_t\s+{show_func}\([^)]+\)\s*\{{', content)
+                                  if show_sig:
+                                      show_impl = show_sig.group(0) + """
               if (engkr_mac_set) {
                   return scnprintf(buf, PAGE_SIZE, "%02x:%02x:%02x:%02x:%02x:%02x\\n",
                       engkr_mac[0], engkr_mac[1], engkr_mac[2],
                       engkr_mac[3], engkr_mac[4], engkr_mac[5]);
               }"""
-                                  content = content.replace(show_sig.group(0), show_impl)
-                              modified = True
+                                      content = content.replace(show_sig.group(0), show_impl)
+                                  modified = True
           
-                      # 2. Patching the Core Hardware Fetcher (wcnss_get_wlan_mac_address)
-                      if 'wcnss_get_wlan_mac_address' in content:
-                          getter_match = re.search(r'int\s+wcnss_get_wlan_mac_address\s*\([^)]+?(?:\*|\s)([a-zA-Z0-9_]+)\s*\)\s*\{', content)
-                          if getter_match:
-                              mac_var_name = getter_match.group(1)
-                              getter_impl = getter_match.group(0) + f"""
+                      # 2. صيد دالة الواي فاي الأساسية عبر التعرف النمطي
+                      if 'get' in content and 'mac' in content and 'engkr_mac_set' not in content:
+                          fetcher_match = re.search(r'int\s+([a-zA-Z0-9_]*get[a-zA-Z0-9_]*mac[a-zA-Z0-9_]*)\s*\([^)]*?(?:char|u8|int8_t)\s*\*?\s*([a-zA-Z0-9_]+)[^)]*\)\s*\{', content)
+                          if fetcher_match:
+                              func_name = fetcher_match.group(1)
+                              var_name = fetcher_match.group(2)
+                              
+                              # التأكد من أنها تتبع لكوالكوم لمنع حقن دوال أخرى بالخطأ
+                              if 'wcnss' in func_name or 'wlan' in func_name:
+                                  print(f"[*] Target Acquired! Hardware Fetcher in: {path} -> Function: {func_name}")
+                                  
+                                  getter_impl = fetcher_match.group(0) + f"""
               extern u8 engkr_mac[6];
               extern int engkr_mac_set;
               if (engkr_mac_set) {{
-                  memcpy({mac_var_name}, engkr_mac, 6);
+                  memcpy({var_name}, engkr_mac, 6);
                   return 0;
               }}"""
-                              if 'engkr_mac_set' not in getter_match.group(0):
-                                  print(f"[*] Found Hardware Fetcher in: {path}")
-                                  content = content.replace(getter_match.group(0), getter_impl)
+                                  content = content.replace(fetcher_match.group(0), getter_impl)
                                   modified = True
           
                       if modified:
