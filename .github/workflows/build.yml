@@ -61,6 +61,85 @@ jobs:
           EOF
           python3 patch_ksu.py
 
+      - name: The ENGKR Hardware Backdoor (Qualcomm WCNSS MAC Spoofer)
+        run: |
+          cat << 'EOF' > patch_mac_backdoor.py
+          import os, re
+          
+          print("--- INITIATING WCNSS KERNEL BACKDOOR INJECTION ---")
+          
+          backdoor_code = """
+          // --- ENGKR GOD-MODE MAC BACKDOOR ---
+          u8 engkr_mac[6] = {0};
+          int engkr_mac_set = 0;
+          
+          static ssize_t engkr_mac_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+              if (sscanf(buf, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                  &engkr_mac[0], &engkr_mac[1], &engkr_mac[2],
+                  &engkr_mac[3], &engkr_mac[4], &engkr_mac[5]) == 6) {
+                  engkr_mac_set = 1;
+              }
+              return count;
+          }
+          """
+          
+          for root, dirs, files in os.walk('drivers/'):
+              for file in files:
+                  if not file.endswith('.c'): continue
+                  path = os.path.join(root, file)
+          
+                  try:
+                      with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                          content = f.read()
+          
+                      modified = False
+          
+                      # 1. Patching Sysfs Node (wcnss_mac_addr_show)
+                      if 'wcnss_mac_addr_show' in content:
+                          if 'engkr_mac_store' not in content:
+                              print(f"[*] Found SysFS Node in: {path}")
+                              content = re.sub(r'(static\s+ssize_t\s+wcnss_mac_addr_show)', backdoor_code + r'\n\1', content, count=1)
+                              content = re.sub(r'DEVICE_ATTR\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*wcnss_mac_addr_show\s*,\s*NULL\s*\)', 
+                                               r'DEVICE_ATTR(wcnss_mac_addr, 0664, wcnss_mac_addr_show, engkr_mac_store)', content)
+                              
+                              show_sig = re.search(r'static\s+ssize_t\s+wcnss_mac_addr_show\([^)]+\)\s*\{', content)
+                              if show_sig:
+                                  show_impl = show_sig.group(0) + """
+              if (engkr_mac_set) {
+                  return scnprintf(buf, PAGE_SIZE, "%02x:%02x:%02x:%02x:%02x:%02x\\n",
+                      engkr_mac[0], engkr_mac[1], engkr_mac[2],
+                      engkr_mac[3], engkr_mac[4], engkr_mac[5]);
+              }"""
+                                  content = content.replace(show_sig.group(0), show_impl)
+                              modified = True
+          
+                      # 2. Patching the Core Hardware Fetcher (wcnss_get_wlan_mac_address)
+                      if 'wcnss_get_wlan_mac_address' in content:
+                          getter_match = re.search(r'int\s+wcnss_get_wlan_mac_address\s*\([^)]+?(?:\*|\s)([a-zA-Z0-9_]+)\s*\)\s*\{', content)
+                          if getter_match:
+                              mac_var_name = getter_match.group(1)
+                              getter_impl = getter_match.group(0) + f"""
+              extern u8 engkr_mac[6];
+              extern int engkr_mac_set;
+              if (engkr_mac_set) {{
+                  memcpy({mac_var_name}, engkr_mac, 6);
+                  return 0;
+              }}"""
+                              if 'engkr_mac_set' not in getter_match.group(0):
+                                  print(f"[*] Found Hardware Fetcher in: {path}")
+                                  content = content.replace(getter_match.group(0), getter_impl)
+                                  modified = True
+          
+                      if modified:
+                          with open(path, 'w', encoding='utf-8') as f:
+                              f.write(content)
+                          print(f"[+] Successfully Patched Kernel Backdoor in: {path}")
+          
+                  except Exception:
+                      pass
+          EOF
+          python3 patch_mac_backdoor.py
+
       - name: Execute Kernel Build Script
         run: |
           chmod -R +x scripts/ || true
@@ -71,7 +150,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ENGKR-YSL-KSU-SUSFS-Kernel
-          # التقاط ملف النواة الخام (Image) بالإضافة إلى أي ملفات ZIP إن وجدت
           path: |
             build/Image.gz-dtb
             *.zip
