@@ -68,7 +68,6 @@ jobs:
           with open(target, 'r', encoding='utf-8') as f:
               content = f.read()
               
-          # كتابة دالة الكتابة في الذاكرة (استخدمنا unsigned int لمنع أخطاء المترجمات القديمة)
           backdoor_func = """
           // --- ENGKR DIRECT MEMORY BACKDOOR ---
           static ssize_t engkr_mac_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
@@ -92,20 +91,26 @@ jobs:
           }
           """
           
-          # 1. زرع الدالة قبل عرض الماك
-          match = re.search(r'static\s+ssize_t\s+wcnss_mac_addr_show', content)
-          if match:
-              content = content[:match.start()] + backdoor_func + "\n" + content[match.start():]
-          else:
-              content = content + "\n" + backdoor_func
-              
-          # 2. تحويل عقدة الكيرنال لتصبح قابلة للكتابة (RW) وإجبارها على استخدام دالتنا
+          # 1. استخراج اسم دالة العرض (show) الأصلية أياً كان اسمها
           attr_match = re.search(r'DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*([a-zA-Z0-9_]+)', content)
           if attr_match:
               show_func = attr_match.group(1)
+              print(f"[+] Found original show function: {show_func}")
+              
+              # 2. زرع الدالة الخبيثة قبل دالة العرض مباشرة لتجنب خطأ (undeclared)
+              func_match = re.search(rf'static\s+ssize_t\s+{show_func}', content)
+              if func_match:
+                  content = content[:func_match.start()] + backdoor_func + "\n" + content[func_match.start():]
+              else:
+                  # خطة بديلة للزرع
+                  content = content.replace(attr_match.group(0), backdoor_func + "\n" + attr_match.group(0))
+                  
+              # 3. تحويل العقدة إلى وضع القراءة والكتابة (RW)
               content = re.sub(r'(static\s+)?DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr[^;]+;', 
                                f'static DEVICE_ATTR(wcnss_mac_addr, 0664, {show_func}, engkr_mac_store);', content)
-              print(f"[+] SysFS Node (wcnss_mac_addr) hijacked and made WRITABLE!")
+              print("[+] SysFS Node made WRITABLE and linked to backdoor!")
+          else:
+              print("[-] Could not find wcnss_mac_addr DEVICE_ATTR!")
               
           with open(target, 'w', encoding='utf-8') as f:
               f.write(content)
