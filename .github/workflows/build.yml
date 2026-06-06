@@ -1,165 +1,113 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel
+name: ENGKR Omniscient MAC Recon
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-kernel:
+  kernel-recon:
     runs-on: ubuntu-latest
     container: ubuntu:20.04
 
     steps:
-      - name: Fix Git Ownership & Install Basics
+      - name: Fix Git Ownership & Install Python
         run: |
           apt-get update
-          apt-get install -y git wget python3
+          apt-get install -y git python3
           git config --global --add safe.directory '*'
 
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Setup Build Environment (Dependencies)
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      - name: The Omniscient MAC Radar (Full Picture Recon)
         run: |
-          apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
-          ln -s /usr/bin/python2 /usr/bin/python || true
+          cat << 'EOF' > omni_recon.py
+          import os
+          import re
 
-      - name: The Ultimate Python Hack (Carpet Bombing KSU Constants)
-        run: |
-          chmod +x kernel_build_fixed.sh
-          # 1. إزالة واجهة menuconfig لمنع توقف الخادم السحابي
-          sed -i '/menuconfig/d' kernel_build_fixed.sh
-          
-          # 2. إجبار مترجم GCC 4.9 القديم على تخطي حاجز الإصدار
-          sed -i 's/# error Sorry, your version of GCC is too old - please use 5.1 or newer.//g' include/linux/compiler-gcc.h
-          
-          # 3. سكربت البايثون الشامل لتمشيط كامل النواة وتحويل الثوابت الحديثة إلى كلاسيكية
-          cat << 'EOF' > patch_ksu.py
-          import os, re
-          # نمط البحث عن أي متغير يبدأ بـ KSU_ ومكتوب بصيغة static const
-          pattern = r'(?:static\s+)?const\s+[a-zA-Z0-9_ ]+\s+(KSU_[A-Z0-9_]+)\s*=\s*([^;]+);'
-          
-          # البحث في كامل ملفات المشروع دون استثناء
-          for root, dirs, files in os.walk('.'):
-              for file in files:
-                  if not file.endswith(('.c', '.h')): continue
-                  path = os.path.join(root, file)
-                  try:
-                      with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                          content = f.read()
-                      
-                      # عملية الاستبدال الجراحية
-                      new_content = re.sub(pattern, r'#define \1 \2', content)
-                      
-                      if new_content != content:
-                          with open(path, 'w', encoding='utf-8') as f:
-                              f.write(new_content)
-                          print(f"Patched KSU Constants in: {path}")
-                  except Exception:
-                      pass
-          EOF
-          python3 patch_ksu.py
+          print("\n" + "="*70)
+          print(" 🌐 ENGKR OMNISCIENT MAC RADAR: FULL KERNEL SCAN ")
+          print("="*70)
 
-      - name: The ENGKR Hardware Backdoor (Smart Hunter-Seeker)
-        run: |
-          cat << 'EOF' > patch_mac_backdoor.py
-          import os, re
-          
-          print("--- INITIATING SMART WCNSS KERNEL BACKDOOR INJECTION ---")
-          
-          backdoor_code = """
-          // --- ENGKR GOD-MODE MAC BACKDOOR ---
-          #include <linux/module.h>
-          u8 engkr_mac[6] = {0};
-          int engkr_mac_set = 0;
-          EXPORT_SYMBOL(engkr_mac);
-          EXPORT_SYMBOL(engkr_mac_set);
-          
-          static ssize_t engkr_mac_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
-              if (sscanf(buf, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-                  &engkr_mac[0], &engkr_mac[1], &engkr_mac[2],
-                  &engkr_mac[3], &engkr_mac[4], &engkr_mac[5]) == 6) {
-                  engkr_mac_set = 1;
-              }
-              return count;
+          # توسيع دائرة البحث لتشمل درايفر الواي فاي ونظام تواصل كوالكوم الأساسي
+          target_dirs = [
+              'drivers/staging/qcacld-2.0',
+              'drivers/staging/prima',
+              'drivers/net/wireless',
+              'drivers/soc/qcom/wcnss' # مسار غاية في الأهمية للتواصل مع المودم
+          ]
+
+          # تصنيف الكلمات المفتاحية للحصول على الصورة الكاملة
+          categories = {
+              "[1] HARDWARE FETCH (SMEM/NV/QMI)": [
+                  r'wcnss_get_wlan_mac', r'smem_alloc.*mac', r'nv_mac', r'qmi.*wlan.*mac', r'wcnss_get_mac_addr'
+              ],
+              "[2] DRIVER INTERNAL STATE (PRIMA/QCACLD)": [
+                  r'wlan_hdd_update_mac', r'hdd_update_mac_config', r'vos_mac_addr', r'sme_update_mac', r'macAddressCurrent'
+              ],
+              "[3] LINUX NETDEV ASSIGNMENT (IOCTL/IFCONFIG)": [
+                  r'dev->dev_addr\s*=', r'\.ndo_set_mac_address', r'wlan_hdd_set_mac_address', r'SIOCSIFHWADDR'
+              ]
           }
-          """
+
+          found_dirs = [d for d in target_dirs if os.path.exists(d)]
+          if not found_dirs:
+              print("[-] Warning: Primary target dirs not found. Scanning 'drivers/' entirely...")
+              found_dirs = ['drivers/']
+          else:
+              print(f"[+] Radar locked on targets: {found_dirs}")
+
+          print("\n[*] Commencing Deep Sector Scan...\n")
+
+          report = {k: [] for k in categories.keys()}
           
-          for root, dirs, files in os.walk('drivers/'):
-              for file in files:
-                  if not file.endswith('.c'): continue
-                  path = os.path.join(root, file)
-          
-                  try:
-                      with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                          content = f.read()
-                      modified = False
-          
-                      # 1. صيد مسار اللعبة Sysfs واستخراج اسم الدالة برمجياً
-                      if 'wcnss_mac_addr' in content and 'DEVICE_ATTR' in content:
-                          if 'engkr_mac_store' not in content:
-                              attr_match = re.search(r'DEVICE_ATTR(?:_RO|_RW)?\s*\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*([a-zA-Z0-9_]+)', content)
-                              if attr_match:
-                                  show_func = attr_match.group(1)
-                                  print(f"[*] Target Acquired! SysFS Node in: {path} -> Function: {show_func}")
+          for d in found_dirs:
+              for root, dirs, files in os.walk(d):
+                  for file in files:
+                      if file.endswith(('.c', '.h')):
+                          file_path = os.path.join(root, file)
+                          try:
+                              with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                  lines = f.readlines()
                                   
-                                  content = re.sub(rf'(static\s+ssize_t\s+{show_func})', backdoor_code + r'\n\1', content, count=1)
-                                  content = re.sub(r'DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*' + show_func + r'[^)]*\)', 
-                                                   r'DEVICE_ATTR(wcnss_mac_addr, 0664, ' + show_func + r', engkr_mac_store)', content)
-                                  
-                                  show_sig = re.search(rf'static\s+ssize_t\s+{show_func}\([^)]+\)\s*\{{', content)
-                                  if show_sig:
-                                      show_impl = show_sig.group(0) + """
-              if (engkr_mac_set) {
-                  return scnprintf(buf, PAGE_SIZE, "%02x:%02x:%02x:%02x:%02x:%02x\\n",
-                      engkr_mac[0], engkr_mac[1], engkr_mac[2],
-                      engkr_mac[3], engkr_mac[4], engkr_mac[5]);
-              }"""
-                                      content = content.replace(show_sig.group(0), show_impl)
-                                  modified = True
-          
-                      # 2. صيد دالة الواي فاي الأساسية عبر التعرف النمطي
-                      if 'get' in content and 'mac' in content and 'engkr_mac_set' not in content:
-                          fetcher_match = re.search(r'int\s+([a-zA-Z0-9_]*get[a-zA-Z0-9_]*mac[a-zA-Z0-9_]*)\s*\([^)]*?(?:char|u8|int8_t)\s*\*?\s*([a-zA-Z0-9_]+)[^)]*\)\s*\{', content)
-                          if fetcher_match:
-                              func_name = fetcher_match.group(1)
-                              var_name = fetcher_match.group(2)
-                              
-                              # التأكد من أنها تتبع لكوالكوم لمنع حقن دوال أخرى بالخطأ
-                              if 'wcnss' in func_name or 'wlan' in func_name:
-                                  print(f"[*] Target Acquired! Hardware Fetcher in: {path} -> Function: {func_name}")
-                                  
-                                  getter_impl = fetcher_match.group(0) + f"""
-              extern u8 engkr_mac[6];
-              extern int engkr_mac_set;
-              if (engkr_mac_set) {{
-                  memcpy({var_name}, engkr_mac, 6);
-                  return 0;
-              }}"""
-                                  content = content.replace(fetcher_match.group(0), getter_impl)
-                                  modified = True
-          
-                      if modified:
-                          with open(path, 'w', encoding='utf-8') as f:
-                              f.write(content)
-                          print(f"[+] Successfully Patched Kernel Backdoor in: {path}")
-          
-                  except Exception:
-                      pass
+                              for i, line in enumerate(lines):
+                                  for cat_name, patterns in categories.items():
+                                      for pat in patterns:
+                                          if re.search(pat, line, re.IGNORECASE):
+                                              # استخراج السياق
+                                              context = []
+                                              start = max(0, i - 2)
+                                              end = min(len(lines), i + 3)
+                                              for j in range(start, end):
+                                                  prefix = ">> " if j == i else "   "
+                                                  context.append(f"{prefix}L{j+1}: {lines[j].rstrip()}")
+                                              
+                                              report[cat_name].append({
+                                                  'file': file_path,
+                                                  'line': i + 1,
+                                                  'pattern': pat,
+                                                  'context': "\n".join(context)
+                                              })
+                          except Exception:
+                              pass
+
+          # طباعة التقرير النهائي المنظم
+          for cat_name, findings in report.items():
+              print("\n" + "*"*70)
+              print(f" {cat_name} - Found: {len(findings)}")
+              print("*"*70)
+              
+              # منع إغراق السجلات إذا كانت النتائج كثيرة جداً، نعرض أهمها
+              for idx, finding in enumerate(findings[:15]): 
+                  print(f"\n[!] Match #{idx+1} in {finding['file']}")
+                  print(f"--- Code Context ---")
+                  print(finding['context'])
+                  print("-" * 30)
+              if len(findings) > 15:
+                  print(f"\n... and {len(findings) - 15} more matches in this category.")
+
+          print("\n" + "="*70)
+          print(" 🏁 RADAR SCAN COMPLETE. ")
+          print("="*70)
           EOF
-          python3 patch_mac_backdoor.py
-
-      - name: Execute Kernel Build Script
-        run: |
-          chmod -R +x scripts/ || true
-          chmod -R +x AnyKernel3/ || true
-          ./kernel_build_fixed.sh
-
-      - name: Upload Kernel Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ENGKR-YSL-KSU-SUSFS-Kernel
-          path: |
-            build/Image.gz-dtb
-            *.zip
+          
+          python3 omni_recon.py
