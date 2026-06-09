@@ -1,4 +1,4 @@
-name: Build ENGKR KSU-Next + SUSFS (The Polyfilled Build)
+name: Build ENGKR Official KSU + SUSFS (The Standard Path)
 
 on:
   workflow_dispatch:
@@ -25,7 +25,15 @@ jobs:
           apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
           ln -s /usr/bin/python2 /usr/bin/python || true
 
-      - name: The Ultimate Python Hack (Carpet Bombing KSU Constants)
+      - name: The Engine Swap (KSU-Next -> Official KSU)
+        run: |
+          echo "[*] Purging KSU-Next from source..."
+          rm -rf drivers/kernelsu
+          echo "[*] Cloning Official KernelSU (Mainline)..."
+          git clone --depth=1 https://github.com/tiann/KernelSU.git drivers/kernelsu
+          echo "[+] Engine Swap Complete. Foundation is now standard!"
+
+      - name: The Ultimate Python Hack (Fixing GCC & Constants)
         run: |
           chmod +x kernel_build_fixed.sh || true
           sed -i '/menuconfig/d' kernel_build_fixed.sh || true
@@ -115,96 +123,22 @@ jobs:
           EOF
           python3 fix_collateral.py
 
-      - name: Integrate Official SUSFS (Master Branch)
+      - name: Integrate Official SUSFS (Kernel + KSU Dual Patching)
         run: |
           rm -fv fs/susfs.c include/linux/susfs.h
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu 2>/dev/null
+          
+          echo "[*] 1. Patching The Kernel..."
           cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1)
           patch -p1 < "$PATCH_FILE" > /tmp/patch_run.txt 2>&1 || true
-
-      - name: The ENGKR Silencer Fix (KSU-Next Compatibility)
-        run: |
-          cat << 'EOF' > silence_ksu_errors.py
-          import os
-          dispatch_file = 'drivers/kernelsu/supercall/dispatch.c'
-          if os.path.exists(dispatch_file):
-              with open(dispatch_file, 'r', encoding='utf-8') as f: lines = f.readlines()
-              for i, line in enumerate(lines):
-                  if 'susfs_start_sdcard_monitor_fn();' in line: lines[i] = line.replace('susfs_start_sdcard_monitor_fn();', '// susfs_start_sdcard_monitor_fn();')
-                  if 'susfs_is_current_proc_umounted()' in line: lines[i] = line.replace('susfs_is_current_proc_umounted()', '0 /* bypassed */')
-              with open(dispatch_file, 'w', encoding='utf-8') as f: f.writelines(lines)
-          EOF
-          python3 silence_ksu_errors.py
-
-      - name: The ENGKR Supercall Polyfill (Bridging SUSFS versions)
-        run: |
-          cat << 'EOF' > fix_supercall.py
-          import os
-          target = 'drivers/kernelsu/supercall/supercall.c'
-          if os.path.exists(target):
-              with open(target, 'r', encoding='utf-8') as f:
-                  lines = f.readlines()
-              
-              fallback_code = """
-          // --- ENGKR SUPERCALL POLYFILLS FOR 4.9 BACKPORT ---
-          #ifndef SUSFS_MAGIC
-          #define SUSFS_MAGIC 0x53555314
-          #endif
-          #ifndef CMD_SUSFS_ADD_SUS_PATH_LOOP
-          #define CMD_SUSFS_ADD_SUS_PATH_LOOP 0x1111
-          static inline void susfs_add_sus_path_loop(void* arg) {}
-          #endif
-          #ifndef CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS
-          #define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS 0x2222
-          static inline void susfs_set_hide_sus_mnts_for_non_su_procs(void* arg) {}
-          #endif
-          #ifndef CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG
-          #define CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG 0x3333
-          static inline void susfs_set_cmdline_or_bootconfig(void* arg) {}
-          #endif
-          #ifndef CMD_SUSFS_ADD_OPEN_REDIRECT
-          #define CMD_SUSFS_ADD_OPEN_REDIRECT 0x4444
-          static inline void susfs_add_open_redirect(void* arg) {}
-          #endif
-          #ifndef CMD_SUSFS_ADD_SUS_MAP
-          #define CMD_SUSFS_ADD_SUS_MAP 0x5555
-          static inline void susfs_add_sus_map(void* arg) {}
-          #endif
-          #ifndef CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING
-          #define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 0x6666
-          static inline void susfs_set_avc_log_spoofing(void* arg) {}
-          #endif
-          #ifndef CMD_SUSFS_SHOW_ENABLED_FEATURES
-          #define CMD_SUSFS_SHOW_ENABLED_FEATURES 0x7777
-          static inline void susfs_get_enabled_features(void* arg) {}
-          #endif
-          #ifndef CMD_SUSFS_SHOW_VARIANT
-          #define CMD_SUSFS_SHOW_VARIANT 0x8888
-          static inline void susfs_show_variant(void* arg) {}
-          #endif
-          #ifndef CMD_SUSFS_SHOW_VERSION
-          #define CMD_SUSFS_SHOW_VERSION 0x9999
-          static inline void susfs_show_version(void* arg) {}
-          #endif
-          #ifndef CMD_SUSFS_ENABLE_LOG
-          #define CMD_SUSFS_ENABLE_LOG 0xAAAA
-          static inline void susfs_enable_log(void* arg) {}
-          #endif
-          // -----------------------------------------------------------
-          """
-              last_inc = 0
-              for i, line in enumerate(lines):
-                  if line.startswith('#include'):
-                      last_inc = i
-              
-              lines.insert(last_inc + 1, fallback_code + '\n')
-              
-              with open(target, 'w', encoding='utf-8') as f:
-                  f.writelines(lines)
-          EOF
-          python3 fix_supercall.py
+          
+          echo "[*] 2. Patching Official KernelSU for SUSFS integration..."
+          KSU_PATCH=$(find /tmp/susfs4ksu/KernelSU_patches -name "*enable_susfs_for_ksu.patch" | head -n 1)
+          cd drivers/kernelsu
+          patch -p1 < "$KSU_PATCH" || true
+          cd ../..
 
       - name: Activate KSU & SUSFS in Defconfig
         run: |
@@ -255,7 +189,7 @@ jobs:
       - name: Upload Ultimate Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ENGKR-YSL-SUSFS-Kernel
+          name: ENGKR-YSL-OfficialKSU-SUSFS-Kernel
           path: |
             build/Image.gz-dtb
             *.zip
