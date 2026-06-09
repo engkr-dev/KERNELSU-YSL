@@ -13,9 +13,6 @@ jobs:
 
       - name: ENGKR SUSFS Reject Analyzer
         run: |
-          cat << 'EOF' > engkr_recon_v8.sh
-          #!/bin/bash
-          
           echo -e "\n============================================================"
           echo "ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 8"
           echo "============================================================"
@@ -34,10 +31,36 @@ jobs:
 
           echo -e "\n[2] APPLYING PATCH (EXPECTING FAILURES)"
           echo "--------------------------------------------------"
-          # تطبيق الباتش فعلياً للسماح له بتوليد ملفات .rej
           patch -p1 < "$PATCH_FILE" > /tmp/patch_run.txt 2>&1
           
           echo -e "\n[3] ANALYZING REJECT FILES (.rej)"
           echo "--------------------------------------------------"
-          # البحث عن ملفات الرفض التي نتجت عن الفشل
-          REJECT_FILES=$(find . -
+          REJECT_FILES=$(find . -name "*.rej")
+          
+          if [ -z "$REJECT_FILES" ]; then
+              echo "[+] UNEXPECTED: No reject files found. Did it actually succeed?"
+              cat /tmp/patch_run.txt
+          else
+              for rej_file in $REJECT_FILES; do
+                  ORIG_FILE="${rej_file%.rej}"
+                  echo -e "\n========================================"
+                  echo "💥 REJECT FOUND IN: $ORIG_FILE"
+                  echo "========================================"
+                  
+                  echo "--- The Code that FAILED to apply (.rej content) ---"
+                  cat "$rej_file"
+                  
+                  echo -e "\n--- The Surrounding Target Code in your Kernel ($ORIG_FILE) ---"
+                  SEARCH_STRING=$(grep -v "^+" "$rej_file" | grep -v "^-" | grep -v "^@" | head -n 2 | tail -n 1 | sed 's/^[ \t]*//')
+                  
+                  if [ -n "$SEARCH_STRING" ]; then
+                      grep -C 5 -F "$SEARCH_STRING" "$ORIG_FILE" || head -n 50 "$ORIG_FILE"
+                  else
+                      head -n 50 "$ORIG_FILE"
+                  fi
+              done
+          fi
+
+          echo -e "\n============================================================"
+          echo "STAGE 8 COMPLETE"
+          echo "============================================================"
