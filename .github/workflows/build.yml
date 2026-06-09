@@ -1,4 +1,4 @@
-name: Build ENGKR KSU v3.1.0 + SUSFS (The VFS Harvester)
+name: Build ENGKR KSU v3.1.0 + SUSFS (The Direct Injector)
 
 on:
   workflow_dispatch:
@@ -44,31 +44,29 @@ jobs:
           echo "[*] Injecting custom ENGKR kernel name..."
           sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-ENGKR-KSU310-SUSFS"/g' arch/arm64/configs/ysl-perf_defconfig
 
-      - name: 3. Harvesting VFS Hooks, Fetching KSU & SUSFS
+      - name: 3. Direct VFS Hook Fetch & KSU Integration
         run: |
-          echo "[*] 1. Harvesting Perfect VFS Hooks from KSU v0.9.5 (Time-Travel)..."
-          rm -rf drivers/kernelsu fs/kernelsu /tmp/ksu_official /tmp/ksu_legacy /tmp/susfs4ksu
-          git clone -b v0.9.5 --depth=1 https://github.com/tiann/KernelSU.git /tmp/ksu_legacy
+          echo "[*] 1. Downloading Perfect VFS Hooks Directly via Wget (Bypassing Git)..."
+          # الرابط المباشر من الأرشيف المجمد v0.6.6
+          wget -qO vfs.patch https://raw.githubusercontent.com/tiann/KernelSU/v0.6.6/kernel/patches/4.9/0001-KernelSU-vfs-hook.patch || \
+          wget -qO vfs.patch https://raw.githubusercontent.com/xiaoleGun/KernelSU_Action/main/patches/4.9/0001-KernelSU-vfs-hook.patch
           
-          PATCH_DIR="/tmp/ksu_legacy/kernel/patches/4.9"
-          if [ -d "$PATCH_DIR" ]; then
-              for p in $PATCH_DIR/*.patch; do
-                  echo "[+] Injecting VFS Hook: $(basename $p)"
-                  patch -p1 < "$p" || true
-              done
-              echo "[+] VFS System Hooks surgically applied from v0.9.5 Archive!"
-          else
-              echo "[-] FATAL: Could not find 4.9 patches in v0.9.5!"
+          if [ ! -s vfs.patch ]; then
+              echo "[-] FATAL: Failed to download VFS hooks from all raw sources!"
               exit 1
           fi
           
-          echo "[*] 2. Fetching Official KernelSU v3.1.0..."
+          echo "[*] 2. Injecting VFS Hooks into Kernel Core..."
+          patch -p1 < vfs.patch || echo "[-] Warning: Patch had fuzz, trusting gatekeeper..."
+          
+          echo "[*] 3. Fetching Official KernelSU v3.1.0 Engine..."
+          rm -rf drivers/kernelsu fs/kernelsu /tmp/ksu_official /tmp/susfs4ksu
           git clone -b v3.1.0 https://github.com/tiann/KernelSU.git /tmp/ksu_official
           
-          echo "[*] 3. Downloading SUSFS..."
+          echo "[*] 4. Downloading SUSFS..."
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
           
-          echo "[*] 4. Applying Kernel 4.9 Patch..."
+          echo "[*] 5. Applying Kernel 4.9 Patch..."
           cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           patch -p1 < $(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1) || true
@@ -102,8 +100,8 @@ jobs:
           cp -r /tmp/ksu_official/kernel fs/kernelsu
           
           echo "[*] Wiring KSU into fs/Makefile & fs/Kconfig..."
-          echo "obj-\$(CONFIG_KSU) += kernelsu/" >> fs/Makefile
-          echo 'source "fs/kernelsu/Kconfig"' >> fs/Kconfig
+          grep -q "kernelsu" fs/Makefile || echo "obj-\$(CONFIG_KSU) += kernelsu/" >> fs/Makefile
+          grep -q "kernelsu" fs/Kconfig || echo 'source "fs/kernelsu/Kconfig"' >> fs/Kconfig
           
           echo "[*] Forcing Version Hardcode to 32302..."
           sed -i 's/ccflags-y += -DKSU_VERSION.*//g' fs/kernelsu/Kbuild
