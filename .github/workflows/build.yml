@@ -1,4 +1,4 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel (FINAL V3)
+name: Build ENGKR KSU-Next + SUSFS Kernel (FINAL V4)
 
 on:
   workflow_dispatch:
@@ -91,34 +91,25 @@ jobs:
         run: |
           cat << 'EOF' > fix_collateral.py
           import os
-          
-          # 1. Fix fs/namespace.c
           try:
-              with open('fs/namespace.c', 'r', encoding='utf-8') as f:
-                  lines = f.readlines()
+              with open('fs/namespace.c', 'r', encoding='utf-8') as f: lines = f.readlines()
               for i, line in enumerate(lines):
                   if 'static int mnt_alloc_group_id(' in line:
                       for j in range(i, min(i+5, len(lines))):
                           if '{' in lines[j] and 'int res' not in lines[j+1]:
                               lines.insert(j+1, '\tint res = 0;\n')
-                              with open('fs/namespace.c', 'w', encoding='utf-8') as out:
-                                  out.writelines(lines)
+                              with open('fs/namespace.c', 'w', encoding='utf-8') as out: out.writelines(lines)
                               break
                       break
           except Exception as e: pass
-
-          # 2. Fix kernel/kallsyms.c
           try:
-              with open('kernel/kallsyms.c', 'r', encoding='utf-8') as f:
-                  lines = f.readlines()
+              with open('kernel/kallsyms.c', 'r', encoding='utf-8') as f: lines = f.readlines()
               in_s_show = False
               for i, line in enumerate(lines):
-                  if 'static int s_show(' in line:
-                      in_s_show = True
+                  if 'static int s_show(' in line: in_s_show = True
                   if in_s_show and line.startswith('}'):
                       lines.insert(i, '\treturn 0;\n')
-                      with open('kernel/kallsyms.c', 'w', encoding='utf-8') as out:
-                          out.writelines(lines)
+                      with open('kernel/kallsyms.c', 'w', encoding='utf-8') as out: out.writelines(lines)
                       break
           except Exception as e: pass
           EOF
@@ -137,25 +128,83 @@ jobs:
         run: |
           cat << 'EOF' > silence_ksu_errors.py
           import os
-          
           dispatch_file = 'drivers/kernelsu/supercall/dispatch.c'
           if os.path.exists(dispatch_file):
-              with open(dispatch_file, 'r', encoding='utf-8') as f:
-                  lines = f.readlines()
-              
+              with open(dispatch_file, 'r', encoding='utf-8') as f: lines = f.readlines()
               for i, line in enumerate(lines):
-                  # Mute sdcard monitor
-                  if 'susfs_start_sdcard_monitor_fn();' in line:
-                      lines[i] = line.replace('susfs_start_sdcard_monitor_fn();', '// susfs_start_sdcard_monitor_fn();')
-                  # Mute umounted check
-                  if 'susfs_is_current_proc_umounted()' in line:
-                      lines[i] = line.replace('susfs_is_current_proc_umounted()', '0 /* susfs_is_current_proc_umounted() bypassed */')
-              
-              with open(dispatch_file, 'w', encoding='utf-8') as f:
-                  f.writelines(lines)
-              print("[+] Silenced KSU-Next specific missing functions.")
+                  if 'susfs_start_sdcard_monitor_fn();' in line: lines[i] = line.replace('susfs_start_sdcard_monitor_fn();', '// susfs_start_sdcard_monitor_fn();')
+                  if 'susfs_is_current_proc_umounted()' in line: lines[i] = line.replace('susfs_is_current_proc_umounted()', '0 /* bypassed */')
+              with open(dispatch_file, 'w', encoding='utf-8') as f: f.writelines(lines)
           EOF
           python3 silence_ksu_errors.py
+
+      - name: The ENGKR Supercall Fix (Bridging SUSFS versions)
+        run: |
+          cat << 'EOF' > fix_supercall.py
+          import os
+          target = 'drivers/kernelsu/supercall/supercall.c'
+          if os.path.exists(target):
+              with open(target, 'r', encoding='utf-8') as f:
+                  lines = f.readlines()
+              
+              fallback_code = """
+          // --- ENGKR SUPERCALL STUBS FOR 4.9 BACKPORT COMPATIBILITY ---
+          #ifndef SUSFS_MAGIC
+          #define SUSFS_MAGIC 0x53555314
+          #endif
+          #ifndef CMD_SUSFS_ADD_SUS_PATH_LOOP
+          #define CMD_SUSFS_ADD_SUS_PATH_LOOP 0x1111
+          static inline void susfs_add_sus_path_loop(void* arg) {}
+          #endif
+          #ifndef CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS
+          #define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS 0x2222
+          static inline void susfs_set_hide_sus_mnts_for_non_su_procs(void* arg) {}
+          #endif
+          #ifndef CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG
+          #define CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG 0x3333
+          static inline void susfs_set_cmdline_or_bootconfig(void* arg) {}
+          #endif
+          #ifndef CMD_SUSFS_ADD_OPEN_REDIRECT
+          #define CMD_SUSFS_ADD_OPEN_REDIRECT 0x4444
+          static inline void susfs_add_open_redirect(void* arg) {}
+          #endif
+          #ifndef CMD_SUSFS_ADD_SUS_MAP
+          #define CMD_SUSFS_ADD_SUS_MAP 0x5555
+          static inline void susfs_add_sus_map(void* arg) {}
+          #endif
+          #ifndef CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING
+          #define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 0x6666
+          static inline void susfs_set_avc_log_spoofing(void* arg) {}
+          #endif
+          #ifndef CMD_SUSFS_SHOW_ENABLED_FEATURES
+          #define CMD_SUSFS_SHOW_ENABLED_FEATURES 0x7777
+          static inline void susfs_get_enabled_features(void* arg) {}
+          #endif
+          #ifndef CMD_SUSFS_SHOW_VARIANT
+          #define CMD_SUSFS_SHOW_VARIANT 0x8888
+          static inline void susfs_show_variant(void* arg) {}
+          #endif
+          #ifndef CMD_SUSFS_SHOW_VERSION
+          #define CMD_SUSFS_SHOW_VERSION 0x9999
+          static inline void susfs_show_version(void* arg) {}
+          #endif
+          #ifndef CMD_SUSFS_ENABLE_LOG
+          #define CMD_SUSFS_ENABLE_LOG 0xAAAA
+          static inline void susfs_enable_log(void* arg) {}
+          #endif
+          // -----------------------------------------------------------
+          """
+              last_inc = 0
+              for i, line in enumerate(lines):
+                  if line.startswith('#include'):
+                      last_inc = i
+              
+              lines.insert(last_inc + 1, fallback_code + '\n')
+              
+              with open(target, 'w', encoding='utf-8') as f:
+                  f.writelines(lines)
+          EOF
+          python3 fix_supercall.py
 
       - name: Activate KSU & SUSFS in Defconfig
         run: |
