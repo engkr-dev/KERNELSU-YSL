@@ -1,4 +1,4 @@
-name: Build ENGKR KSU v3.1.0 + SUSFS (The Ironclad Pipeline - V2)
+name: Build ENGKR KSU v3.1.0 + SUSFS (The Ironclad Pipeline - V3)
 
 on:
   workflow_dispatch:
@@ -41,7 +41,7 @@ jobs:
           echo "[*] Injecting custom ENGKR kernel name..."
           sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-ENGKR-KSU310-SUSFS"/g' arch/arm64/configs/ysl-perf_defconfig
 
-      - name: 3. Fetching KSU & SUSFS (The Facade Injection)
+      - name: 3. Fetching KSU & SUSFS (The Lockpicker Algorithm)
         run: |
           echo "[*] 1. Fetching Official KernelSU v3.1.0..."
           rm -rf drivers/kernelsu fs/kernelsu /tmp/ksu_official /tmp/susfs4ksu
@@ -55,13 +55,30 @@ jobs:
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           patch -p1 < $(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1)
           
-          echo "[*] 4. Applying KSU Patch (In original repo)..."
-          KSU_PATCH=$(find /tmp/susfs4ksu -type f -name "*enable_susfs_for_ksu.patch" | head -n 1)
+          echo "[*] 4. Applying KSU Patch (Smart Brute-Force)..."
           cd /tmp/ksu_official
-          patch -p1 < "$KSU_PATCH" || { echo "[-] CRITICAL: Patch rejected!"; exit 1; }
+          PATCH_APPLIED=0
+          
+          # خوارزمية صانع المفاتيح: تجربة كل الباتشات المتاحة حتى نجد المتوافق
+          for p in $(find /tmp/susfs4ksu -type f -name "*.patch" | grep -i "ksu" | grep -i "susfs"); do
+              echo "[*] Testing Patch Key: $(basename $p)"
+              if patch -p1 --dry-run --silent < "$p" > /dev/null 2>&1; then
+                  echo "[+] PERFECT MATCH UNLOCKED! Applying: $(basename $p)"
+                  patch -p1 < "$p"
+                  PATCH_APPLIED=1
+                  break
+              else
+                  echo "[-] Key rejected. Trying next..."
+              fi
+          done
+          
+          if [ $PATCH_APPLIED -eq 0 ]; then
+              echo "[-] FATAL: No SUSFS patch matched your KSU architecture!"
+              exit 1
+          fi
           cd $GITHUB_WORKSPACE
           
-          echo "[*] 5. Moving the patched KSU into VFS System (fs/kernelsu)..."
+          echo "[*] 5. Moving the perfectly patched KSU into VFS System (fs/kernelsu)..."
           cp -r /tmp/ksu_official/kernel fs/kernelsu
           echo "obj-\$(CONFIG_KSU) += kernelsu/" >> fs/Makefile
           
@@ -98,7 +115,7 @@ jobs:
           import os, re
           target = 'drivers/soc/qcom/wcnss/wcnss_wlan.c'
           if os.path.exists(target):
-              with open(target, 'r') as f: content = f.read()
+              with open(target, 'r', encoding='utf-8') as f: content = f.read()
               backdoor_func = """
               static ssize_t engkr_mac_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
                   unsigned int mac[6];
@@ -118,7 +135,7 @@ jobs:
                   if func_match: content = content[:func_match.start()] + backdoor_func + "\n" + content[func_match.start():]
                   else: content = content.replace(attr_match.group(0), backdoor_func + "\n" + attr_match.group(0))
                   content = re.sub(r'(static\s+)?DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr[^;]+;', f'static DEVICE_ATTR(wcnss_mac_addr, 0664, {show_func}, engkr_mac_store);', content)
-                  with open(target, 'w') as f: f.write(content)
+                  with open(target, 'w', encoding='utf-8') as f: f.write(content)
           EOF
           python3 patch_mac_backdoor.py
 
