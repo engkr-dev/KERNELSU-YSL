@@ -1,10 +1,10 @@
-name: Build ENGKR Official KSU + SUSFS (The Standard Path)
+name: ENGKR Source Recon V14 (The Error Catcher)
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-kernel:
+  kernel-recon:
     runs-on: ubuntu-latest
     container: ubuntu:20.04
 
@@ -18,181 +18,89 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Setup Build Environment (Dependencies)
+      - name: Setup Build Environment
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
           ln -s /usr/bin/python2 /usr/bin/python || true
 
-      - name: The Engine Swap (Corrected Path Alignment)
+      - name: Engine Swap (Official KSU Setup)
         run: |
-          echo "[*] Purging KSU-Next from source..."
           rm -rf drivers/kernelsu
-          echo "[*] Fetching Official KernelSU (Mainline)..."
           git clone --depth=1 https://github.com/tiann/KernelSU.git /tmp/ksu_official
-          echo "[*] Aligning folder structure..."
-          # نأخذ محتويات مجلد kernel فقط ونضعها في المكان الصحيح
           cp -r /tmp/ksu_official/kernel drivers/kernelsu
-          echo "[+] Engine Swap Complete. Foundation is now perfectly standard!"
 
-      - name: The Ultimate Python Hack (Fixing GCC & Constants)
+      - name: The Precision Purge & Fixes
         run: |
           chmod +x kernel_build_fixed.sh || true
           sed -i '/menuconfig/d' kernel_build_fixed.sh || true
           sed -i 's/# error Sorry, your version of GCC is too old - please use 5.1 or newer.//g' include/linux/compiler-gcc.h || true
           
-          cat << 'EOF' > patch_ksu.py
-          import os, re
-          pattern = r'(?:static\s+)?const\s+[a-zA-Z0-9_ ]+\s+(KSU_[A-Z0-9_]+)\s*=\s*([^;]+);'
-          for root, dirs, files in os.walk('.'):
-              for file in files:
-                  if not file.endswith(('.c', '.h')): continue
-                  path = os.path.join(root, file)
-                  try:
-                      with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                          content = f.read()
-                      new_content = re.sub(pattern, r'#define \1 \2', content)
-                      if new_content != content:
-                          with open(path, 'w', encoding='utf-8') as f:
-                              f.write(new_content)
-                  except Exception:
-                      pass
-          EOF
-          python3 patch_ksu.py
-
-      - name: The ENGKR Precision Purge (Clearing Broken SUSFS Hooks)
-        run: |
+          # مسح KSU_SUSFS القديم لحماية النواة
           cat << 'EOF' > purge_script.py
           import os
-          target_dirs = ['fs', 'include', 'kernel', 'mm', 'block', 'security']
-          infected_files = []
-          for d in target_dirs:
+          for d in ['fs', 'include', 'kernel', 'mm', 'block', 'security']:
               for root, dirs, files in os.walk(d):
                   for file in files:
                       if file.endswith(('.c', '.h')):
                           path = os.path.join(root, file)
                           try:
                               with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                                  if 'CONFIG_KSU_SUSFS' in f.read():
-                                      infected_files.append(path)
+                                  if 'CONFIG_KSU_SUSFS' not in f.read(): continue
+                              with open(path, 'r', encoding='utf-8', errors='ignore') as f: lines = f.readlines()
+                              out_lines = []
+                              skip = 0
+                              for line in lines:
+                                  clean = line.strip()
+                                  if skip > 0:
+                                      if clean.startswith('#endif'): skip -= 1
+                                      elif clean.startswith('#if'): skip += 1
+                                      continue
+                                  if clean.startswith('#ifdef CONFIG_KSU_SUSFS') or clean.startswith('#if defined(CONFIG_KSU_SUSFS') or clean.startswith('#ifndef CONFIG_KSU_SUSFS'):
+                                      skip = 1
+                                      continue
+                                  out_lines.append(line)
+                              with open(path, 'w', encoding='utf-8') as f: f.writelines(out_lines)
                           except: pass
-          
-          for path in infected_files:
-              with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                  lines = f.readlines()
-              out_lines = []
-              skip_depth = 0
-              for line in lines:
-                  clean_line = line.strip()
-                  if skip_depth > 0:
-                      if clean_line.startswith('#endif'): skip_depth -= 1
-                      elif clean_line.startswith('#if'): skip_depth += 1
-                      continue
-                  if clean_line.startswith('#ifdef CONFIG_KSU_SUSFS') or clean_line.startswith('#if defined(CONFIG_KSU_SUSFS') or clean_line.startswith('#ifndef CONFIG_KSU_SUSFS'):
-                      skip_depth = 1
-                      continue
-                  out_lines.append(line)
-              with open(path, 'w', encoding='utf-8') as f:
-                  f.writelines(out_lines)
           EOF
           python3 purge_script.py
 
-      - name: The ENGKR Surgical Fix (Restoring Collateral Damage)
-        run: |
-          cat << 'EOF' > fix_collateral.py
-          import os
-          try:
-              with open('fs/namespace.c', 'r', encoding='utf-8') as f: lines = f.readlines()
-              for i, line in enumerate(lines):
-                  if 'static int mnt_alloc_group_id(' in line:
-                      for j in range(i, min(i+5, len(lines))):
-                          if '{' in lines[j] and 'int res' not in lines[j+1]:
-                              lines.insert(j+1, '\tint res = 0;\n')
-                              with open('fs/namespace.c', 'w', encoding='utf-8') as out: out.writelines(lines)
-                              break
-                      break
-          except Exception as e: pass
-          try:
-              with open('kernel/kallsyms.c', 'r', encoding='utf-8') as f: lines = f.readlines()
-              in_s_show = False
-              for i, line in enumerate(lines):
-                  if 'static int s_show(' in line: in_s_show = True
-                  if in_s_show and line.startswith('}'):
-                      lines.insert(i, '\treturn 0;\n')
-                      with open('kernel/kallsyms.c', 'w', encoding='utf-8') as out: out.writelines(lines)
-                      break
-          except Exception as e: pass
-          EOF
-          python3 fix_collateral.py
-
-      - name: Integrate Official SUSFS (Kernel + KSU Dual Patching)
+      - name: Integrate Official SUSFS 4.9
         run: |
           rm -fv fs/susfs.c include/linux/susfs.h
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu 2>/dev/null
-          
-          echo "[*] 1. Patching The Kernel..."
           cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
-          PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1)
-          patch -p1 < "$PATCH_FILE" > /tmp/patch_run.txt 2>&1 || true
+          patch -p1 < $(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1) > /dev/null 2>&1 || true
           
-          echo "[*] 2. Patching Official KernelSU for SUSFS integration..."
-          KSU_PATCH=$(find /tmp/susfs4ksu/KernelSU_patches -name "*enable_susfs_for_ksu.patch" | head -n 1)
           cd drivers/kernelsu
-          patch -p1 < "$KSU_PATCH" || true
+          patch -p1 < $(find /tmp/susfs4ksu/KernelSU_patches -name "*enable_susfs_for_ksu.patch" | head -n 1) > /dev/null 2>&1 || true
           cd ../..
 
-      - name: Activate KSU & SUSFS in Defconfig
+      - name: Defconfig Activation
         run: |
           echo "CONFIG_KSU=y" >> arch/arm64/configs/ysl-perf_defconfig
           echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/ysl-perf_defconfig
-          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> arch/arm64/configs/ysl-perf_defconfig
-          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> arch/arm64/configs/ysl-perf_defconfig
-          echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> arch/arm64/configs/ysl-perf_defconfig
 
-      - name: The ENGKR Hardware Backdoor (WCNSS Direct Memory Override)
+      - name: Targeted Build & Error Capture
         run: |
-          cat << 'EOF' > patch_mac_backdoor.py
-          import os, re
-          target = 'drivers/soc/qcom/wcnss/wcnss_wlan.c'
-          if os.path.exists(target):
-              with open(target, 'r', encoding='utf-8') as f: content = f.read()
-              backdoor_func = """
-              static ssize_t engkr_mac_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
-                  unsigned int mac[6];
-                  if (!penv) return count;
-                  if (sscanf(buf, "%x:%x:%x:%x:%x:%x", &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) == 6) {
-                      penv->wlan_nv_mac_addr[0] = (char)mac[0]; penv->wlan_nv_mac_addr[1] = (char)mac[1];
-                      penv->wlan_nv_mac_addr[2] = (char)mac[2]; penv->wlan_nv_mac_addr[3] = (char)mac[3];
-                      penv->wlan_nv_mac_addr[4] = (char)mac[4]; penv->wlan_nv_mac_addr[5] = (char)mac[5];
-                  }
-                  return count;
-              }
-              """
-              attr_match = re.search(r'DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*([a-zA-Z0-9_]+)', content)
-              if attr_match:
-                  show_func = attr_match.group(1)
-                  func_match = re.search(rf'static\s+ssize_t\s+{show_func}', content)
-                  if func_match:
-                      content = content[:func_match.start()] + backdoor_func + "\n" + content[func_match.start():]
-                  else:
-                      content = content.replace(attr_match.group(0), backdoor_func + "\n" + attr_match.group(0))
-                  content = re.sub(r'(static\s+)?DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr[^;]+;', f'static DEVICE_ATTR(wcnss_mac_addr, 0664, {show_func}, engkr_mac_store);', content)
-                  with open(target, 'w', encoding='utf-8') as f: f.write(content)
-          EOF
-          python3 patch_mac_backdoor.py
-
-      - name: Execute Kernel Build Script
-        run: |
-          chmod -R +x scripts/ || true
-          chmod -R +x AnyKernel3/ || true
-          ./kernel_build_fixed.sh
-
-      - name: Upload Ultimate Kernel Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ENGKR-YSL-OfficialKSU-SUSFS-Kernel
-          path: |
-            build/Image.gz-dtb
-            *.zip
+          echo -e "\n============================================================"
+          echo "STARTING BUILD SIMULATION (SILENT MODE)"
+          echo "============================================================"
+          # تشغيل البناء وتوجيه كل المخرجات إلى ملف، وتجاهل فشل السكربت
+          ./kernel_build_fixed.sh > build_full.log 2>&1 || true
+          
+          echo -e "\n============================================================"
+          echo "💥 EXTRACTING THE REAL ERRORS 💥"
+          echo "============================================================"
+          # استخراج السطور التي تحتوي على error مع سطرين قبلها و 4 سطور بعدها
+          grep -iE "^.*error:.*" -B 2 -A 4 build_full.log > real_errors.txt
+          
+          if [ -s real_errors.txt ]; then
+              cat real_errors.txt
+          else
+              echo "[+] No obvious 'error:' tags found. The error might be a linker error (undefined reference)."
+              echo "--- Tail of the build log ---"
+              tail -n 50 build_full.log
+          fi
