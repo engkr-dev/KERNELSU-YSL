@@ -1,4 +1,4 @@
-name: ENGKR Source Recon V8.1 (Reject Analyzer Fix)
+name: ENGKR Source Recon V9 (Final Integrity Audit)
 
 on:
   workflow_dispatch:
@@ -11,57 +11,50 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: ENGKR SUSFS Reject Analyzer
+      - name: ENGKR Comprehensive Audit Script
         run: |
           echo -e "\n============================================================"
-          echo "ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 8.1"
+          echo "ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 9 (FINAL AUDIT)"
           echo "============================================================"
 
-          echo -e "\n[1] PREPARING ENVIRONMENT"
+          echo -e "\n[1] PREPARING THE OFFICIAL SUSFS FILES"
           echo "--------------------------------------------------"
           rm -fv fs/susfs.c include/linux/susfs.h
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu 2>/dev/null
-          cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
-          cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
-          
           PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1)
           if [ -z "$PATCH_FILE" ]; then
               PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.14.patch" | head -n 1)
           fi
+          echo "[+] Targeting patch: $(basename $PATCH_FILE)"
 
-          echo -e "\n[2] APPLYING PATCH (IGNORING GITHUB ERRORS)"
+          echo -e "\n[2] FS/MAKEFILE INTEGRATION CHECK"
           echo "--------------------------------------------------"
-          # إضافة || true لمنع الجيت هب من قتل السكربت عند فشل الباتش
-          patch -p1 < "$PATCH_FILE" > /tmp/patch_run.txt 2>&1 || true
-          
-          echo -e "\n[3] ANALYZING REJECT FILES (.rej)"
+          # هل الكيرنل جاهز لترجمة susfs.o؟
+          grep -n -i "susfs" fs/Makefile || echo "[-] susfs.o is missing from fs/Makefile! We will need to inject it."
+
+          echo -e "\n[3] DEFCONFIG INJECTION POINTS (ysl-perf_defconfig)"
           echo "--------------------------------------------------"
-          REJECT_FILES=$(find . -name "*.rej")
-          
-          if [ -z "$REJECT_FILES" ]; then
-              echo "[+] UNEXPECTED: No reject files found. Did it actually succeed?"
-              cat /tmp/patch_run.txt
-          else
-              for rej_file in $REJECT_FILES; do
-                  ORIG_FILE="${rej_file%.rej}"
-                  echo -e "\n========================================"
-                  echo "💥 REJECT FOUND IN: $ORIG_FILE"
-                  echo "========================================"
-                  
-                  echo "--- The Code that FAILED to apply (.rej content) ---"
-                  cat "$rej_file"
-                  
-                  echo -e "\n--- The Surrounding Target Code in your Kernel ($ORIG_FILE) ---"
-                  SEARCH_STRING=$(grep -v "^+" "$rej_file" | grep -v "^-" | grep -v "^@" | head -n 2 | tail -n 1 | sed 's/^[ \t]*//')
-                  
-                  if [ -n "$SEARCH_STRING" ]; then
-                      grep -C 5 -F "$SEARCH_STRING" "$ORIG_FILE" || head -n 50 "$ORIG_FILE"
-                  else
-                      head -n 50 "$ORIG_FILE"
-                  fi
-              done
-          fi
+          # قراءة آخر 15 سطراً لمعرفة كيف نختم الملف بمفاتيح SUSFS
+          echo "[*] Last 15 lines of ysl-perf_defconfig:"
+          tail -n 15 arch/arm64/configs/ysl-perf_defconfig
+
+          echo -e "\n[4] SURGICAL INJECTION TARGET 1: fs/readdir.c"
+          echo "--------------------------------------------------"
+          # فحص المنطقة التي سقط فيها الباتش بالسطر والرقم
+          echo "[*] Context around <asm/uaccess.h>:"
+          grep -n -C 5 "#include <asm/uaccess.h>" fs/readdir.c || echo "[-] uaccess.h not found!"
+
+          echo -e "\n[5] SURGICAL INJECTION TARGET 2: fs/proc/task_mmu.c"
+          echo "--------------------------------------------------"
+          # فحص المنطقة الثانية التي سقط فيها الباتش
+          echo "[*] Context around 'const char *name = NULL;':"
+          grep -n -C 5 "const char \*name = NULL;" fs/proc/task_mmu.c || echo "[-] Target variable not found!"
+
+          echo -e "\n[6] KSU CONFIGURATION CHECK"
+          echo "--------------------------------------------------"
+          # التأكد من أن KSU نفسه مفعل في الـ defconfig الأساسي
+          grep -E "CONFIG_KSU" arch/arm64/configs/ysl-perf_defconfig || echo "[-] CONFIG_KSU is NOT set in defconfig! We must add it."
 
           echo -e "\n============================================================"
-          echo "STAGE 8.1 COMPLETE"
+          echo "STAGE 9 COMPLETE - READY FOR FINAL BUILD SCRIPT"
           echo "============================================================"
