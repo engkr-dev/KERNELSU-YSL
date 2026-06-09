@@ -1,4 +1,4 @@
-name: Build ENGKR KSU v3.1.0 + SUSFS (The Path-Finder V15)
+name: Build ENGKR KSU v3.1.0 + SUSFS (The Golden Builder)
 
 on:
   workflow_dispatch:
@@ -9,11 +9,23 @@ jobs:
     container: ubuntu:20.04
 
     steps:
-      - name: Setup Environment
+      - name: Setup System & Environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          TZ: UTC
         run: |
+          # حل مشكلة tzdata التفاعلية بشكل جذري
+          ln -fs /usr/share/zoneinfo/UTC /etc/localtime
           apt-get update
+          apt-get install -y tzdata
+          
+          # تثبيت الأدوات الأساسية
           apt-get install -y git wget python3 unifdef bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
+          ln -s /usr/bin/python2 /usr/bin/python || true
           git config --global --add safe.directory '*'
+
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
 
       - name: 1. Fetch Toolchains (Smart Path Detection)
         run: |
@@ -23,25 +35,40 @@ jobs:
           wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz -O gcc32.tar.gz
           tar -xf gcc32.tar.gz -C toolchains/gcc32
           
-          # اكتشاف المسار الحقيقي للـ bin
+          # استكشاف المسارات المطلقة
           GCC64_BIN=$(find $PWD/toolchains/gcc64 -name "aarch64-linux-android-gcc" | xargs dirname)
           GCC32_BIN=$(find $PWD/toolchains/gcc32 -name "arm-linux-androideabi-gcc" | xargs dirname)
           
           echo "GCC64_PATH=$GCC64_BIN/aarch64-linux-android-" >> $GITHUB_ENV
           echo "GCC32_PATH=$GCC32_BIN/arm-linux-androideabi-" >> $GITHUB_ENV
-          
-          echo "[*] GCC64 Path: $GCC64_BIN"
-          echo "[*] GCC32 Path: $GCC32_BIN"
-          [ -f "$GCC64_BIN/aarch64-linux-android-gcc" ] || { echo "[-] GCC64 not found!"; exit 1; }
+          echo "[+] Toolchains ready at: $GCC64_BIN"
 
-      - name: 2. Patching and Injection
+      - name: 2. VFS Surgeon & Injection
         run: |
+          # تنظيف قديم
           sed -i '/kernelsu/d' drivers/Makefile drivers/Kconfig fs/Makefile fs/Kconfig || true
           
+          # حقن الخطافات (VFS Hooks) برمجياً
+          cat << 'EOF' > inject_vfs.py
+          import os, re
+          def inject_after_brace(file_path, func_pattern, hook_code):
+              if not os.path.exists(file_path): return
+              with open(file_path, "r") as f: content = f.read()
+              if "ksu_handle" in content: return
+              if "#include <linux/types.h>" not in content: content = "#include <linux/types.h>\n" + content
+              match = re.search(func_pattern + r'\s*\{', content)
+              if match:
+                  content = content[:match.end()] + "\n" + hook_code + content[match.end():]
+                  with open(file_path, "w") as f: f.write(content)
+
+          inject_after_brace("fs/open.c", r'long\s+do_sys_open\s*\([^)]*\)', "\n\textern bool ksu_vfs_open_hook __attribute__((weak));\n\textern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode) __attribute__((weak));\n\tif (unlikely(ksu_vfs_open_hook)) ksu_handle_open(&dfd, &filename, &flags, &mode);\n")
+          inject_after_brace("fs/exec.c", r'static\s+int\s+do_execveat_common\s*\([^)]*\)', "\n\textern bool ksu_execveat_hook __attribute__((weak));\n\textern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *ptr, int *flags) __attribute__((weak));\n\tif (unlikely(ksu_execveat_hook)) ksu_handle_execveat(&fd, &filename, &bprm, &flags);\n")
+          EOF
+          python3 inject_vfs.py
+          
+          # جلب KSU و SUSFS
           git clone -b v3.1.0 https://github.com/tiann/KernelSU.git /tmp/ksu_official
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
-          
-          # استخدام --force لتجاوز فشل الـ hunks
           patch -p1 --force < $(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1) || true
           
           cp -r /tmp/ksu_official/kernel fs/kernelsu
@@ -55,6 +82,7 @@ jobs:
         run: |
           sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-ENGKR-KSU310-SUSFS"/g' arch/arm64/configs/ysl-perf_defconfig
           
+          # البناء الصامت
           make ARCH=arm64 CROSS_COMPILE=$GCC64_PATH CROSS_COMPILE_ARM32=$GCC32_PATH ysl-perf_defconfig
           echo "CONFIG_KSU=y" >> .config
           echo "CONFIG_KSU_SUSFS=y" >> .config
@@ -63,7 +91,7 @@ jobs:
           
           mkdir -p build && cp arch/arm64/boot/Image.gz-dtb build/
 
-      - name: 4. Upload Artifact
+      - name: 4. Upload Result
         uses: actions/upload-artifact@v4
         with:
           name: ENGKR-YSL-KSU-FINAL-V15
