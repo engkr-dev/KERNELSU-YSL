@@ -1,4 +1,4 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel (FINAL)
+name: Build ENGKR KSU-Next + SUSFS Kernel (FINAL V2)
 
 on:
   workflow_dispatch:
@@ -86,6 +86,47 @@ jobs:
                   f.writelines(out_lines)
           EOF
           python3 purge_script.py
+
+      - name: The ENGKR Surgical Fix (Restoring Collateral Damage)
+        run: |
+          cat << 'EOF' > fix_collateral.py
+          import os
+          
+          # 1. Fix fs/namespace.c (Missing 'res' variable)
+          try:
+              with open('fs/namespace.c', 'r', encoding='utf-8') as f:
+                  lines = f.readlines()
+              for i, line in enumerate(lines):
+                  if 'static int mnt_alloc_group_id(' in line:
+                      for j in range(i, min(i+5, len(lines))):
+                          if '{' in lines[j] and 'int res' not in lines[j+1]:
+                              lines.insert(j+1, '\tint res = 0;\n')
+                              with open('fs/namespace.c', 'w', encoding='utf-8') as out:
+                                  out.writelines(lines)
+                              print("[+] Surgically restored 'res' in fs/namespace.c")
+                              break
+                      break
+          except Exception as e:
+              print(f"[-] Error fixing namespace.c: {e}")
+
+          # 2. Fix kernel/kallsyms.c (Missing return statement)
+          try:
+              with open('kernel/kallsyms.c', 'r', encoding='utf-8') as f:
+                  lines = f.readlines()
+              in_s_show = False
+              for i, line in enumerate(lines):
+                  if 'static int s_show(' in line:
+                      in_s_show = True
+                  if in_s_show and line.startswith('}'):
+                      lines.insert(i, '\treturn 0;\n')
+                      with open('kernel/kallsyms.c', 'w', encoding='utf-8') as out:
+                          out.writelines(lines)
+                      print("[+] Surgically restored return in kernel/kallsyms.c")
+                      break
+          except Exception as e:
+              print(f"[-] Error fixing kallsyms.c: {e}")
+          EOF
+          python3 fix_collateral.py
 
       - name: Integrate Official SUSFS 4.9
         run: |
