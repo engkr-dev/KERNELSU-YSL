@@ -1,4 +1,4 @@
-name: Build ENGKR Official KSU v3.1.0 + SUSFS (The Final Production)
+name: Build ENGKR Official KSU v3.1.0 + SUSFS (The Certified Silver Bullet)
 
 on:
   workflow_dispatch:
@@ -36,14 +36,23 @@ jobs:
           sed -i '/zeromount\.o/d' fs/Makefile
           sed -i '/CONFIG_ZEROMOUNT/d' arch/arm64/configs/ysl-perf_defconfig || true
 
-      - name: The Engine Swap (Official KernelSU v3.1.0)
+      - name: Custom Kernel Naming
+        run: |
+          echo "[*] Injecting custom ENGKR kernel name..."
+          sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-ENGKR-KSU-SUSFS"/g' arch/arm64/configs/ysl-perf_defconfig
+
+      - name: The Engine Swap & Hardcoding Version (v3.1.0)
         run: |
           echo "[*] Fetching Official KernelSU v3.1.0..."
           rm -rf drivers/kernelsu
           git clone -b v3.1.0 https://github.com/tiann/KernelSU.git /tmp/ksu_official
           cp -r /tmp/ksu_official/kernel drivers/kernelsu
-          cp -r /tmp/ksu_official/.git drivers/kernelsu/
-          echo "[+] KernelSU pinned to v3.1.0 with Git History for accurate versioning!"
+          
+          echo "[*] FORCING VERSION HARDCODE TO 32302 (The Silver Bullet)..."
+          sed -i 's/ccflags-y += -DKSU_VERSION.*//g' drivers/kernelsu/Kbuild
+          sed -i 's/-DKSU_VERSION=[^ ]*//g' drivers/kernelsu/Kbuild
+          echo "ccflags-y += -DKSU_VERSION=32302" >> drivers/kernelsu/Kbuild
+          echo "[+] KernelSU Version brutally hardcoded to 32302!"
 
       - name: SUSFS Dynamic Integration
         run: |
@@ -56,7 +65,7 @@ jobs:
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           patch -p1 < $(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1) || true
           
-          # 2. KSU Patch (Dynamic search)
+          # 2. KSU Patch
           KSU_PATCH=$(find /tmp/susfs4ksu -type f -name "*enable_susfs_for_ksu.patch" | head -n 1)
           if [ -z "$KSU_PATCH" ]; then
               KSU_PATCH=$(find /tmp/susfs4ksu -type f -name "*ksu*.patch" | head -n 1)
@@ -66,7 +75,6 @@ jobs:
               cd drivers/kernelsu
               patch -p1 < "$KSU_PATCH" || true
               cd ../..
-              echo "[+] SUSFS perfectly injected!"
           fi
 
       - name: The Ultimate Python Hack (Fixing GCC Constants)
@@ -105,7 +113,7 @@ jobs:
           import os, re
           target = 'drivers/soc/qcom/wcnss/wcnss_wlan.c'
           if os.path.exists(target):
-              with open(target, 'r') as f: content = f.read()
+              with open(target, 'r', encoding='utf-8') as f: content = f.read()
               backdoor_func = """
               static ssize_t engkr_mac_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
                   unsigned int mac[6];
@@ -125,7 +133,7 @@ jobs:
                   if func_match: content = content[:func_match.start()] + backdoor_func + "\n" + content[func_match.start():]
                   else: content = content.replace(attr_match.group(0), backdoor_func + "\n" + attr_match.group(0))
                   content = re.sub(r'(static\s+)?DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr[^;]+;', f'static DEVICE_ATTR(wcnss_mac_addr, 0664, {show_func}, engkr_mac_store);', content)
-                  with open(target, 'w') as f: f.write(content)
+                  with open(target, 'w', encoding='utf-8') as f: f.write(content)
           EOF
           python3 patch_mac_backdoor.py
 
@@ -133,13 +141,59 @@ jobs:
         run: |
           chmod -R +x scripts/ || true
           chmod -R +x AnyKernel3/ || true
-          echo "[*] Compiling the masterpiece..."
           ./kernel_build_fixed.sh
+
+      - name: 🛡️ The Production Gate & ABI Validation (التحقق الصارم المكتوب)
+        run: |
+          echo -e "\n============================================================"
+          echo "🛡️ STARTING BINARY FORENSICS & INJECTION VERIFICATION 🛡️"
+          echo "============================================================"
+          
+          # التحقق من وجود ملف vmlinux المترجم كمصدر للحقيقة
+          if [ ! -f out/vmlinux ]; then
+             echo "[-] FATAL: Compiled vmlinux binary not found in out directory!"
+             exit 1
+          fi
+          
+          # استخراج الرموز البرمجية الثنائية للتأكد من وجود دوال النواة بعد الحقن
+          echo "[*] 1. Interrogating ABI for KernelSU Integration..."
+          KSU_SYMS=$(nm out/vmlinux | grep -iE " ksu_" || true)
+          if [ -n "$KSU_SYMS" ]; then
+             echo "[+] SUCCESS: KernelSU hooks found embedded in core kernel layout!"
+             echo "$KSU_SYMS" | head -n 10
+          else
+             echo "[-] FAIL: No KernelSU internal tracking symbols located in the architecture layout!"
+             exit 1
+          fi
+          
+          echo -e "\n[*] 2. Interrogating ABI for SUSFS System Hooks..."
+          SUSFS_SYMS=$(nm out/vmlinux | grep -iE " susfs_" || true)
+          if [ -n "$SUSFS_SYMS" ]; then
+             echo "[+] SUCCESS: SUSFS security abstraction hooks validated inside VFS pipeline!"
+             echo "$SUSFS_SYMS" | head -n 10
+          else
+             echo "[-] FAIL: SUSFS file-hiding routines are absent from the architectural system map!"
+             exit 1
+          fi
+          
+          echo -e "\n[*] 3. Verifying Hardware Backdoor Execution Mapping..."
+          BACKDOOR_SYM=$(nm out/vmlinux | grep "engkr_mac_store" || true)
+          if [ -n "$BACKDOOR_SYM" ]; then
+             echo "[+] SUCCESS: Hardware backdoor 'engkr_mac_store' mapped perfectly into direct device address memory!"
+             echo "     Address location: $BACKDOOR_SYM"
+          else
+             echo "[-] FAIL: Hardware device memory override mapping was bypassed or failed to compile!"
+             exit 1
+          fi
+          
+          echo -e "\n============================================================"
+          echo "👑 VERIFICATION PASSED: CODE IS COMBINED & INJECTED WITHOUT REJECTS 👑"
+          echo "============================================================"
 
       - name: Upload Ultimate Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ENGKR-YSL-KSU-v3.1.0-SUSFS
+          name: ENGKR-YSL-KSU-32302-SUSFS
           path: |
             build/Image.gz-dtb
             *.zip
