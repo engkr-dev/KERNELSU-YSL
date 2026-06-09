@@ -1,4 +1,4 @@
-name: Build ENGKR KSU v3.1.0 + SUSFS (The Self-Contained Injector)
+name: Build ENGKR KSU v3.1.0 + SUSFS (The VFS Surgeon)
 
 on:
   workflow_dispatch:
@@ -36,89 +36,72 @@ jobs:
           sed -i '/zeromount\.o/d' fs/Makefile
           sed -i '/CONFIG_ZEROMOUNT/d' arch/arm64/configs/ysl-perf_defconfig || true
           
-          echo "[*] Removing dead KSU links from drivers..."
-          sed -i '/kernelsu/d' drivers/Makefile drivers/Kconfig || true
+          echo "[*] Removing dead KSU links..."
+          sed -i '/kernelsu/d' drivers/Makefile drivers/Kconfig fs/Makefile fs/Kconfig || true
 
       - name: 2. Custom Kernel Naming
         run: |
           echo "[*] Injecting custom ENGKR kernel name..."
           sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-ENGKR-KSU310-SUSFS"/g' arch/arm64/configs/ysl-perf_defconfig
 
-      - name: 3. The Local Architect (Building VFS Hooks from Scratch)
+      - name: 3. The Python VFS Surgeon (Syntax-Perfect Hooks)
         run: |
-          echo "[*] 1. Creating Kernel 4.9 VFS Hooks Locally..."
+          echo "[*] Injecting VFS Hooks locally using Python..."
+          cat << 'EOF' > inject_vfs.py
+          import os
+
+          def inject(file_path, externs, anchor, hook):
+              if not os.path.exists(file_path): return
+              with open(file_path, "r") as f: content = f.read()
+              if "ksu_vfs" in content or "ksu_exec" in content: return
+              content = externs + "\n" + content
+              content = content.replace(anchor, hook + "\n" + anchor, 1)
+              with open(file_path, "w") as f: f.write(content)
+
+          # 1. fs/open.c
+          inject("fs/open.c",
+          "extern bool ksu_vfs_open_hook __read_mostly;\nextern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode);",
+          "\tif (fd)\n\t\treturn fd;",
+          "\tif (unlikely(ksu_vfs_open_hook))\n\t\tksu_handle_open(&dfd, &filename, &flags, &mode);\n")
+
+          # 2. fs/exec.c
+          inject("fs/exec.c",
+          "extern bool ksu_execveat_hook __read_mostly;\nextern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *ptr, int *flags);",
+          "\tretval = unshare_files(&displaced);",
+          "\tif (unlikely(ksu_execveat_hook)) {\n\t\tretval = ksu_handle_execveat(&fd, &filename, &bprm, &flags);\n\t\tif (retval)\n\t\t\tgoto out_free;\n\t}\n")
+
+          # 3. fs/read_write.c
+          if os.path.exists("fs/read_write.c"):
+              with open("fs/read_write.c", "r") as f: content = f.read()
+              if "ksu_vfs" not in content:
+                  content = "extern bool ksu_vfs_read_hook __read_mostly;\nextern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\nextern bool ksu_vfs_write_hook __read_mostly;\nextern int ksu_handle_vfs_write(struct file **file_ptr, const char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n" + content
+                  content = content.replace("\tif (!(file->f_mode & FMODE_CAN_READ))", "\tif (unlikely(ksu_vfs_read_hook))\n\t\tksu_handle_vfs_read(&file, &buf, &count, &pos);\n\n\tif (!(file->f_mode & FMODE_CAN_READ))", 1)
+                  content = content.replace("\tif (!(file->f_mode & FMODE_CAN_WRITE))", "\tif (unlikely(ksu_vfs_write_hook))\n\t\tksu_handle_vfs_write(&file, &buf, &count, &pos);\n\n\tif (!(file->f_mode & FMODE_CAN_WRITE))", 1)
+                  with open("fs/read_write.c", "w") as f: f.write(content)
+
+          # 4. fs/stat.c
+          inject("fs/stat.c",
+          "extern bool ksu_vfs_stat_hook __read_mostly;\nextern int ksu_handle_stat(int *dfd, const char __user **filename_ptr, int *flags);",
+          "\tunsigned int lookup_flags = 0;",
+          "\tunsigned int lookup_flags = 0;\n\n\tif (unlikely(ksu_vfs_stat_hook))\n\t\tksu_handle_stat(&dfd, &filename, &flag);\n")
           
-          # كتابة الباتش اليدوي لـ exec.c
-          cat << 'EOF' > vfs_exec.patch
-          --- a/fs/exec.c
-          +++ b/fs/exec.c
-          @@ -1654,6 +1654,9 @@
-           	int retval;
-           	int i;
-           
-          +	extern bool ksu_execveat_hook __read_mostly;
-          +	extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *ptr, int *flags);
-          +
-           	if (IS_ERR(filename))
-           		return PTR_ERR(filename);
-           
-          @@ -1661,6 +1664,12 @@
-           	if (!bprm)
-           		goto out_ret;
-           
-          +	if (unlikely(ksu_execveat_hook)) {
-          +		retval = ksu_handle_execveat(&fd, &filename, &bprm, &flags);
-          +		if (retval)
-          +			goto out_free;
-          +	}
-          +
-           	retval = unshare_files(&displaced);
-           	if (retval)
-           		goto out_free;
+          print("[+] Python VFS Injector Finished Successfully!")
           EOF
+          python3 inject_vfs.py
           
-          # كتابة الباتش اليدوي لـ open.c
-          cat << 'EOF' > vfs_open.patch
-          --- a/fs/open.c
-          +++ b/fs/open.c
-          @@ -348,6 +348,13 @@
-           	return error;
-           }
-           
-          +extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);
-          +extern int ksu_handle_vfs_write(struct file **file_ptr, const char __user **buf_ptr, size_t *count_ptr, loff_t **pos);
-          +extern int ksu_handle_stat(int *dfd, const char __user **filename_ptr, int *flags);
-          +extern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode);
-          +extern bool ksu_vfs_read_hook __read_mostly;
-          +extern bool ksu_vfs_write_hook __read_mostly;
-          +
-           long do_sys_faccessat(int dfd, const char __user *filename, int mode)
-           {
-           	struct path path;
-          EOF
-          
-          echo "[*] 2. Applying the Local VFS Hooks..."
-          patch -p1 < vfs_exec.patch || echo "[-] Warning: exec hook had fuzz, trusting gatekeeper..."
-          patch -p1 < vfs_open.patch || echo "[-] Warning: open hook had fuzz, trusting gatekeeper..."
-          
-          # حقن استدعاء الفتح (do_sys_open) يدوياً لتجنب مشاكل الباتشات
-          sed -i '/long do_sys_open(/a\ \n\textern bool ksu_vfs_open_hook __read_mostly;\n\textern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode);\n\tif (unlikely(ksu_vfs_open_hook)) ksu_handle_open(&dfd, &filename, &flags, &mode);\n' fs/open.c
-          
-          echo "[+] Local VFS System Hooks surgically applied!"
-          
-          echo "[*] 3. Fetching Official KernelSU v3.1.0 Engine..."
+          echo "[*] Fetching Official KernelSU v3.1.0 Engine..."
           rm -rf drivers/kernelsu fs/kernelsu /tmp/ksu_official /tmp/susfs4ksu
           git clone -b v3.1.0 https://github.com/tiann/KernelSU.git /tmp/ksu_official
           
-          echo "[*] 4. Downloading SUSFS..."
+          echo "[*] Downloading SUSFS..."
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
           
-          echo "[*] 5. Applying Kernel 4.9 Patch..."
+          echo "[*] Applying SUSFS Kernel 4.9 Patch..."
           cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           patch -p1 < $(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1) || true
 
-      - name: 4. The Surgical SUSFS Injection (Append Mode)
+      - name: 4. The Surgical SUSFS Injection
         run: |
           echo "[*] Wiring SUSFS surgically into KSU v3.1.0..."
           cd /tmp/ksu_official
@@ -143,12 +126,12 @@ jobs:
           echo "[+] Surgical Code Injection Successful!"
           cd $GITHUB_WORKSPACE
           
-          echo "[*] Moving the patched KSU into VFS System (fs/kernelsu)..."
+          echo "[*] Moving patched KSU into VFS System (fs/kernelsu)..."
           cp -r /tmp/ksu_official/kernel fs/kernelsu
           
           echo "[*] Wiring KSU into fs/Makefile & fs/Kconfig..."
-          grep -q "kernelsu" fs/Makefile || echo "obj-\$(CONFIG_KSU) += kernelsu/" >> fs/Makefile
-          grep -q "kernelsu" fs/Kconfig || echo 'source "fs/kernelsu/Kconfig"' >> fs/Kconfig
+          echo "obj-\$(CONFIG_KSU) += kernelsu/" >> fs/Makefile
+          echo 'source "fs/kernelsu/Kconfig"' >> fs/Kconfig
           
           echo "[*] Forcing Version Hardcode to 32302..."
           sed -i 's/ccflags-y += -DKSU_VERSION.*//g' fs/kernelsu/Kbuild
@@ -214,9 +197,9 @@ jobs:
           echo "============================================================"
           if [ ! -d "fs/kernelsu" ]; then echo "[-] FATAL: fs/kernelsu directory missing!"; exit 1; fi
           
-          # الدليل القاطع على نجاح زرع الخطافات في قلب النظام
-          if ! grep -q "ksu" fs/exec.c; then echo "[-] FATAL: VFS Hook missing in fs/exec.c!"; exit 1; fi
-          if ! grep -q "ksu" fs/open.c; then echo "[-] FATAL: VFS Hook missing in fs/open.c!"; exit 1; fi
+          # الدليل القاطع على نجاح الجراح الآلي
+          if ! grep -q "ksu_vfs_open_hook" fs/open.c; then echo "[-] FATAL: VFS Hook missing in fs/open.c!"; exit 1; fi
+          if ! grep -q "ksu_execveat_hook" fs/exec.c; then echo "[-] FATAL: VFS Hook missing in fs/exec.c!"; exit 1; fi
           echo "[+] System Hooks Verified in VFS Core!"
           
           if ! grep -q "kernelsu" fs/Makefile; then echo "[-] FATAL: KSU not hooked in fs/Makefile!"; exit 1; fi
@@ -252,12 +235,12 @@ jobs:
           nm out/vmlinux | grep -iE " susfs_" | head -n 5 || { echo "[-] FAIL: No SUSFS symbols found!"; exit 1; }
           nm out/vmlinux | grep "engkr_mac_store" || { echo "[-] FAIL: Backdoor not compiled!"; exit 1; }
           
-          echo "[+] ALL CHECKS PASSED: THE KERNEL IS FLAWLESS AND FULLY BRIDGED!"
+          echo "[+] ALL CHECKS PASSED: THE KERNEL IS FLAWLESS AND BRIDGED!"
 
       - name: 10. Upload Ultimate Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ENGKR-YSL-KSU-32302-SUSFS-LOCAL-VFS
+          name: ENGKR-YSL-KSU-32302-SUSFS-SURGEON
           path: |
             build/Image.gz-dtb
             *.zip
