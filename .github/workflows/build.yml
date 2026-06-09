@@ -1,80 +1,76 @@
-name: KERNEL RECONNAISSANCE PROBE (The X-Ray)
+name: SUSFS 4.9 Backport (C Error Hunter)
 
 on:
   workflow_dispatch:
 
 jobs:
-  recon-mission:
+  kernel-c-debug:
     runs-on: ubuntu-latest
+    container: ubuntu:20.04
 
     steps:
+      - name: Setup Build Environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          TZ: UTC
+        run: |
+          ln -fs /usr/share/zoneinfo/UTC /etc/localtime
+          apt-get update && apt-get install -y tzdata
+          apt-get install -y git wget python3 bc bison build-essential ccache curl flex g++-multilib gcc-multilib lib32ncurses5-dev lib32readline-dev lib32z1-dev libssl-dev libxml2 libxml2-utils lzop rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2
+          ln -s /usr/bin/python2 /usr/bin/python || true
+          git config --global --add safe.directory '*'
+
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: The Python X-Ray Scanner
+      - name: Fetch Toolchains (Smart Path)
         run: |
-          cat << 'EOF' > kernel_xray.py
-          import os
-          import glob
-
-          print("\n" + "="*60)
-          print(" 🕵️‍♂️ KERNEL RECONNAISSANCE REPORT STARTED 🕵️‍♂️ ")
-          print("="*60 + "\n")
-
-          # 1. تحديد مكان KernelSU-Next بالضبط
-          ksu_dirs = glob.glob("**/kernelsu", recursive=True) + glob.glob("**/KernelSU-Next", recursive=True)
-          print(f"[*] 1. KernelSU Directories Found: {ksu_dirs}")
-
-          # 2. فحص ملف ksu.c للعثور على دالة الإقلاع (Init)
-          for kdir in ksu_dirs:
-              ksu_c = os.path.join(kdir, "ksu.c")
-              if os.path.exists(ksu_c):
-                  print(f"\n[*] 2. Analyzing {ksu_c} for initialization routines:")
-                  with open(ksu_c, "r", encoding="utf-8", errors="ignore") as f:
-                      lines = f.readlines()
-                      for i, line in enumerate(lines):
-                          # نبحث عن الدوال التي تبدأ بـ init أو late_initcall
-                          if "initcall" in line or "__init" in line or "susfs" in line.lower():
-                              print(f"    Line {i+1}: {line.strip()}")
-
-          # 3. فحص خطافات VFS الأساسية لمعرفة كيف تم حقنها مسبقاً
-          vfs_files = ["fs/open.c", "fs/exec.c", "fs/read_write.c", "fs/stat.c"]
-          print("\n[*] 3. Scanning VFS Core Files for existing KSU hooks:")
-          for vfs in vfs_files:
-              if os.path.exists(vfs):
-                  hook_found = False
-                  with open(vfs, "r", encoding="utf-8", errors="ignore") as f:
-                      lines = f.readlines()
-                      for i, line in enumerate(lines):
-                          if "ksu" in line.lower():
-                              if not hook_found:
-                                  print(f"\n  --> Hooks found in {vfs}:")
-                                  hook_found = True
-                              print(f"      Line {i+1}: {line.strip()}")
-                  if not hook_found:
-                      print(f"  [-] No KSU hooks found in {vfs}")
-              else:
-                  print(f"  [!] File {vfs} does not exist!")
-
-          # 4. فحص ملفات Kbuild و Makefile لمعرفة طريقة الربط
-          print("\n[*] 4. Checking Build Configs (Kbuild/Makefile) for KSU parameters:")
-          for kdir in ksu_dirs:
-              kbuild = os.path.join(kdir, "Kbuild")
-              if os.path.exists(kbuild):
-                  with open(kbuild, "r", encoding="utf-8", errors="ignore") as f:
-                      print(f"  --> Content of {kbuild}:")
-                      for line in f.readlines():
-                          if "ccflags" in line or "VERSION" in line:
-                              print(f"      {line.strip()}")
-
-          # 5. التحقق من وجود SUSFS القديم
-          print("\n[*] 5. Checking for legacy SUSFS files:")
-          print(f"  --> fs/susfs.c exists: {os.path.exists('fs/susfs.c')}")
-          print(f"  --> include/linux/susfs.h exists: {os.path.exists('include/linux/susfs.h')}")
-
-          print("\n" + "="*60)
-          print(" 🏁 RECONNAISSANCE COMPLETE 🏁 ")
-          print("="*60 + "\n")
-          EOF
+          mkdir -p toolchains/gcc64 toolchains/gcc32
+          wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz -O gcc64.tar.gz
+          tar -xf gcc64.tar.gz -C toolchains/gcc64
+          wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz -O gcc32.tar.gz
+          tar -xf gcc32.tar.gz -C toolchains/gcc32
           
-          python3 kernel_xray.py
+          GCC64_BIN=$(find $PWD/toolchains/gcc64 -name "aarch64-linux-android-gcc" | xargs dirname)
+          GCC32_BIN=$(find $PWD/toolchains/gcc32 -name "arm-linux-androideabi-gcc" | xargs dirname)
+          
+          echo "GCC64_PATH=$GCC64_BIN/aarch64-linux-android-" >> $GITHUB_ENV
+          echo "GCC32_PATH=$GCC32_BIN/arm-linux-androideabi-" >> $GITHUB_ENV
+
+      - name: Inject Pure SUSFS Engine
+        run: |
+          # مسح أي تجميعات قديمة
+          make clean || true
+          
+          # جلب ملفات SUSFS الأساسية فقط
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
+          cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
+          cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
+          
+          # إجبار نظام البناء (Makefile) على تجميع susfs.o
+          grep -q "susfs.o" fs/Makefile || echo "obj-y += susfs.o" >> fs/Makefile
+
+      - name: Execute C Compilation (Hunting Mode)
+        run: |
+          echo "[*] Generating Defconfig..."
+          make ARCH=arm64 CROSS_COMPILE=$GCC64_PATH CROSS_COMPILE_ARM32=$GCC32_PATH ysl-perf_defconfig
+          
+          # إجبار تفعيل خصائص SUSFS
+          echo "CONFIG_KSU=y" >> .config
+          echo "CONFIG_KSU_SUSFS=y" >> .config
+          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> .config
+          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> .config
+          echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> .config
+          echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> .config
+          
+          echo "============================================================"
+          echo " 🚦 INITIATING KERNEL 4.9 C COMPILATION (EXPECTING ERRORS) 🚦 "
+          echo "============================================================"
+          
+          # نقوم بتشغيل البناء مع توجيه الأخطاء بوضوح
+          make ARCH=arm64 CROSS_COMPILE=$GCC64_PATH CROSS_COMPILE_ARM32=$GCC32_PATH -j$(nproc) || true
+          
+          echo "============================================================"
+          echo " 🔍 EXTRACTING SUSFS.C COMPILATION ERRORS 🔍 "
+          echo "============================================================"
+          make ARCH=arm64 CROSS_COMPILE=$GCC64_PATH CROSS_COMPILE_ARM32=$GCC32_PATH fs/susfs.o 2>&1 | grep -E "error:|warning:" || echo "No direct errors caught on fs/susfs.o. Check main log."
