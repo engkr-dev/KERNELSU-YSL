@@ -1,4 +1,4 @@
-name: Build ENGKR KSU v3.1.0 + SUSFS (The Debugger V8)
+name: Build ENGKR KSU v3.1.0 + SUSFS (The Forceful Injector V9)
 
 on:
   workflow_dispatch:
@@ -25,64 +25,56 @@ jobs:
           apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
           ln -s /usr/bin/python2 /usr/bin/python || true
 
-      - name: The Surgical Sniper (Function-Based Injection)
+      - name: 1. Laser Purge
         run: |
-          echo "[*] Injecting VFS Hooks locally using Python Sniper..."
-          cat << 'EOF' > inject_vfs.py
-          import os
+          echo "[*] Scrubbing old traces..."
+          sed -i '/kernelsu/d' drivers/Makefile drivers/Kconfig fs/Makefile fs/Kconfig || true
 
-          def force_inject(file_path, func_name, hook_code):
-              with open(file_path, "r") as f: lines = f.readlines()
-              
-              new_lines = []
-              in_target = False
-              for line in lines:
-                  new_lines.append(line)
-                  if func_name in line and "{" in line:
-                      new_lines.append(hook_code)
-                      print(f"[+] Injected into {func_name} in {file_path}")
-              
-              with open(file_path, "w") as f: f.writelines(new_lines)
-
-          # Injector
-          force_inject("fs/open.c", "do_sys_open", "\n\textern bool ksu_vfs_open_hook; extern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode); if (unlikely(ksu_vfs_open_hook)) ksu_handle_open(&dfd, &filename, &flags, &mode);\n")
-          force_inject("fs/exec.c", "do_execveat_common", "\n\textern bool ksu_execveat_hook; extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *ptr, int *flags); if (unlikely(ksu_execveat_hook)) ksu_handle_execveat(&fd, &filename, &bprm, &flags);\n")
-          EOF
-          python3 inject_vfs.py
+      - name: 2. Forceful VFS Hooking (The Hammer Approach)
+        run: |
+          echo "[*] Injecting Hooks with Forceful Sed..."
           
-          # استخراج وتجهيز الكيرنل
+          # حقن Hook في open.c
+          sed -i '/long do_sys_open/a \\textern bool ksu_vfs_open_hook; extern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode); if (unlikely(ksu_vfs_open_hook)) ksu_handle_open(&dfd, &filename, &flags, &mode);' fs/open.c
+          
+          # حقن Hook في exec.c
+          sed -i '/static int do_execveat_common/a \\textern bool ksu_execveat_hook; extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *ptr, int *flags); if (unlikely(ksu_execveat_hook)) ksu_handle_execveat(&fd, &filename, &bprm, &flags);' fs/exec.c
+
+      - name: 3. Fetching KSU & SUSFS
+        run: |
           git clone -b v3.1.0 https://github.com/tiann/KernelSU.git /tmp/ksu_official
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
-          cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
-          cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           patch -p1 < $(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1) || true
           
           cp -r /tmp/ksu_official/kernel fs/kernelsu
           echo "obj-\$(CONFIG_KSU) += kernelsu/" >> fs/Makefile
           echo 'source "fs/kernelsu/Kconfig"' >> fs/Kconfig
-          echo "ccflags-y += -DKSU_VERSION=32302 -DCONFIG_KSU_SUSFS" >> fs/kernelsu/Kbuild
+          
+          # الحقن اليدوي لـ SUSFS
+          sed -i '1s/^/#include <linux\/susfs.h>\n/' fs/kernelsu/ksu.c
+          echo -e "\nstatic int __init engkr_ksu_susfs_init(void) { susfs_sus_path(); return 0; }\nlate_initcall(engkr_ksu_susfs_init);" >> fs/kernelsu/ksu.c
+          echo "ccflags-y += -DCONFIG_KSU_SUSFS -DKSU_VERSION=32302" >> fs/kernelsu/Kbuild
 
-      - name: 🚦 THE DEBUGGER GATE 🚦
+      - name: 4. Final Verification Gate
         run: |
-          echo "--- Content of fs/open.c around do_sys_open ---"
-          grep -A 10 "do_sys_open" fs/open.c
+          echo "--- Checking fs/open.c for Hook ---"
+          grep -C 5 "ksu_handle_open" fs/open.c
           
           if ! grep -q "ksu_handle_open" fs/open.c; then 
               echo "[-] FATAL: Hook failed!"
               exit 1
           fi
-          echo "[+] VFS Hook Verified!"
+          echo "[+] System Hooks Verified!"
 
-      - name: 8. Execute Production Build
+      - name: 5. Execute Production Build
         run: |
           chmod -R +x scripts/ || true
-          chmod -R +x AnyKernel3/ || true
           ./kernel_build_fixed.sh
 
-      - name: 9. Upload Ultimate Kernel Artifact
+      - name: 6. Upload
         uses: actions/upload-artifact@v4
         with:
-          name: ENGKR-YSL-KSU-DEBUG-V8
+          name: ENGKR-YSL-KSU-32302-SUSFS-FORCED
           path: |
             build/Image.gz-dtb
             *.zip
