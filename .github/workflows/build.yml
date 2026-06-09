@@ -1,4 +1,4 @@
-name: Build ENGKR KSU v3.1.0 + SUSFS (The Final Locksmith)
+name: Build ENGKR KSU v3.1.0 + SUSFS (The Final Locksmith V5)
 
 on:
   workflow_dispatch:
@@ -25,7 +25,7 @@ jobs:
           apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
           ln -s /usr/bin/python2 /usr/bin/python || true
 
-      - name: 1. The Laser Purge
+      - name: 1. The Laser Purge (With Dead Link Removal)
         run: |
           echo "[*] Cleaning kernel from old traces..."
           FILES=$(find fs/ include/ kernel/ block/ security/ -type f \( -name "*.c" -o -name "*.h" \) -print0 | xargs -0 grep -lE 'CONFIG_KSU_SUSFS|CONFIG_ZEROMOUNT' 2>/dev/null) || true
@@ -35,6 +35,9 @@ jobs:
           rm -fv fs/zeromount.c include/linux/zeromount.h
           sed -i '/zeromount\.o/d' fs/Makefile
           sed -i '/CONFIG_ZEROMOUNT/d' arch/arm64/configs/ysl-perf_defconfig || true
+          
+          echo "[*] Removing dead KSU links from drivers..."
+          sed -i '/kernelsu/d' drivers/Makefile drivers/Kconfig || true
 
       - name: 2. Custom Kernel Naming
         run: |
@@ -60,10 +63,8 @@ jobs:
           echo "[*] Wiring SUSFS surgically into KSU v3.1.0..."
           cd /tmp/ksu_official
           
-          # 1. إجبار استدعاء مكتبة susfs في ملف ksu.c الأساسي
           sed -i '1s/^/#include <linux\/susfs.h>\n/' kernel/ksu.c
           
-          # 2. حقن دالة التشغيل في نهاية ملف ksu.c بدلاً من البحث عن سطر معين
           cat << 'EOF' >> kernel/ksu.c
           
           /* ENGKR SUSFS MANUAL INITIALIZATION HOOK */
@@ -77,7 +78,6 @@ jobs:
           late_initcall(engkr_ksu_susfs_init);
           EOF
           
-          # 3. إجبار المترجم على تجميع ملفات susfs مع KSU إذا كانت موجودة
           echo "ccflags-y += -DCONFIG_KSU_SUSFS" >> kernel/Makefile
           
           echo "[+] Surgical Code Injection Successful!"
@@ -85,7 +85,11 @@ jobs:
           
           echo "[*] Moving the patched KSU into VFS System (fs/kernelsu)..."
           cp -r /tmp/ksu_official/kernel fs/kernelsu
+          
+          echo "[*] Wiring KSU into fs/Makefile & fs/Kconfig..."
           echo "obj-\$(CONFIG_KSU) += kernelsu/" >> fs/Makefile
+          # إضافة رابط الإعدادات لكي لا ينهار البناء
+          echo 'source "fs/kernelsu/Kconfig"' >> fs/Kconfig
           
           echo "[*] Forcing Version Hardcode to 32302..."
           sed -i 's/ccflags-y += -DKSU_VERSION.*//g' fs/kernelsu/Kbuild
@@ -151,6 +155,7 @@ jobs:
           echo "============================================================"
           if [ ! -d "fs/kernelsu" ]; then echo "[-] FATAL: fs/kernelsu directory missing!"; exit 1; fi
           if ! grep -q "kernelsu" fs/Makefile; then echo "[-] FATAL: KSU not hooked in fs/Makefile!"; exit 1; fi
+          if ! grep -q "kernelsu" fs/Kconfig; then echo "[-] FATAL: KSU not hooked in fs/Kconfig!"; exit 1; fi
           if ! grep -q "32302" fs/kernelsu/Kbuild; then echo "[-] FATAL: Version 32302 not hardcoded in Kbuild!"; exit 1; fi
           if ! grep -q "engkr_ksu_susfs_init" fs/kernelsu/ksu.c; then echo "[-] FATAL: Surgical SUSFS hook failed!"; exit 1; fi
           if [ ! -f "fs/susfs.c" ] || [ ! -f "include/linux/susfs.h" ]; then echo "[-] FATAL: SUSFS core files missing!"; exit 1; fi
@@ -192,4 +197,3 @@ jobs:
           path: |
             build/Image.gz-dtb
             *.zip
-            
