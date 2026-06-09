@@ -1,134 +1,111 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel
+name: ENGKR Source Recon V1 (VFS & SUSFS Blueprint)
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-kernel:
+  kernel-autopsy:
     runs-on: ubuntu-latest
-    container: ubuntu:20.04
 
     steps:
-      - name: Fix Git Ownership & Install Basics
-        run: |
-          apt-get update
-          apt-get install -y git wget python3
-          git config --global --add safe.directory '*'
-
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Setup Build Environment (Dependencies)
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      - name: ENGKR Python Recon Script
         run: |
-          apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
-          ln -s /usr/bin/python2 /usr/bin/python || true
+          cat << 'EOF' > engkr_recon.py
+          import os, re, sys
 
-      - name: The Ultimate Python Hack (Carpet Bombing KSU Constants)
-        run: |
-          chmod +x kernel_build_fixed.sh
-          # 1. إزالة واجهة menuconfig
-          sed -i '/menuconfig/d' kernel_build_fixed.sh
-          
-          # 2. تخطي حاجز الإصدار للمترجم
-          sed -i 's/# error Sorry, your version of GCC is too old - please use 5.1 or newer.//g' include/linux/compiler-gcc.h
-          
-          # 3. سكربت الثوابت الخاص بـ KSU
-          cat << 'EOF' > patch_ksu.py
-          import os, re
-          pattern = r'(?:static\s+)?const\s+[a-zA-Z0-9_ ]+\s+(KSU_[A-Z0-9_]+)\s*=\s*([^;]+);'
-          for root, dirs, files in os.walk('.'):
-              for file in files:
-                  if not file.endswith(('.c', '.h')): continue
-                  path = os.path.join(root, file)
-                  try:
-                      with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                          content = f.read()
-                      new_content = re.sub(pattern, r'#define \1 \2', content)
-                      if new_content != content:
-                          with open(path, 'w', encoding='utf-8') as f:
-                              f.write(new_content)
-                          print(f"Patched KSU Constants in: {path}")
-                  except Exception:
-                      pass
-          EOF
-          python3 patch_ksu.py
+          def print_header(title):
+              print(f"\n{'='*60}\n{title}\n{'='*60}")
 
-      - name: The ENGKR Hardware Backdoor (WCNSS Direct Memory Override)
-        run: |
-          cat << 'EOF' > patch_mac_backdoor.py
-          import os, re
-          
-          target = 'drivers/soc/qcom/wcnss/wcnss_wlan.c'
-          if not os.path.exists(target):
-              print(f"[-] FATAL ERROR: {target} not found!")
-              exit(1)
-              
-          with open(target, 'r', encoding='utf-8') as f:
-              content = f.read()
-              
-          backdoor_func = """
-          // --- ENGKR DIRECT MEMORY BACKDOOR ---
-          static ssize_t engkr_mac_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
-              unsigned int mac[6];
-              if (!penv) return count;
-              
-              if (sscanf(buf, "%x:%x:%x:%x:%x:%x",
-                  &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) == 6) {
+          def get_file_content(filepath, lines=None):
+              if not os.path.exists(filepath):
+                  return f"[-] File not found: {filepath}"
+              try:
+                  with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                      if lines:
+                          return "".join([next(f) for _ in range(lines)])
+                      return f.read()
+              except Exception as e:
+                  return f"[-] Error reading {filepath}: {e}"
+
+          def find_function_signature(filepath, func_name):
+              if not os.path.exists(filepath):
+                  return f"[-] {filepath} not found."
+              try:
+                  with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                      lines = f.readlines()
                   
-                  // مسح الماك الحقيقي وكتابة الماك المزيف مباشرة في قلب المودم!
-                  penv->wlan_nv_mac_addr[0] = (char)mac[0];
-                  penv->wlan_nv_mac_addr[1] = (char)mac[1];
-                  penv->wlan_nv_mac_addr[2] = (char)mac[2];
-                  penv->wlan_nv_mac_addr[3] = (char)mac[3];
-                  penv->wlan_nv_mac_addr[4] = (char)mac[4];
-                  penv->wlan_nv_mac_addr[5] = (char)mac[5];
-                  
-                  printk(KERN_INFO "ENGKR: Hardware MAC surgically altered in WCNSS baseband!\\n");
-              }
-              return count;
-          }
-          """
-          
-          # 1. استخراج اسم دالة العرض (show) الأصلية أياً كان اسمها
-          attr_match = re.search(r'DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*([a-zA-Z0-9_]+)', content)
-          if attr_match:
-              show_func = attr_match.group(1)
-              print(f"[+] Found original show function: {show_func}")
-              
-              # 2. زرع الدالة الخبيثة قبل دالة العرض مباشرة لتجنب خطأ (undeclared)
-              func_match = re.search(rf'static\s+ssize_t\s+{show_func}', content)
-              if func_match:
-                  content = content[:func_match.start()] + backdoor_func + "\n" + content[func_match.start():]
+                  for i, line in enumerate(lines):
+                      if func_name in line and not line.strip().startswith(('//', '/*')):
+                          # return the line and the next two lines for context
+                          context = "".join(lines[i:i+3]).strip()
+                          # basic filter to avoid calling sites, looking for declarations
+                          if '{' in context or ';' in context:
+                              return f"[+] Found in {filepath}:\n    {context}"
+                  return f"[-] Function {func_name} declaration not found in {filepath}."
+              except Exception as e:
+                  return f"[-] Error parsing {filepath}: {e}"
+
+          print_header("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 1")
+
+          # 1. KERNEL VERSION CHECK
+          print("\n[1] EXACT KERNEL VERSION (Makefile)")
+          print("-" * 50)
+          print(get_file_content("Makefile", 5).strip())
+
+          # 2. KSU INTEGRATION CHECK
+          print("\n[2] KERNELSU PRESENCE & PATH")
+          print("-" * 50)
+          ksu_paths = ['KernelSU', 'drivers/kernelsu', 'fs/ksu']
+          found_ksu = False
+          for path in ksu_paths:
+              if os.path.isdir(path):
+                  print(f"[+] KSU directory found at: {path}")
+                  found_ksu = True
+          if not found_ksu:
+              print("[-] No standard KSU directory found. (Might be fully integrated into fs/)")
+
+          # 3. SUSFS LEFTOVERS CHECK
+          print("\n[3] SUSFS LEFTOVERS (Did the dev leave anything?)")
+          print("-" * 50)
+          susfs_files = ['fs/susfs.c', 'include/linux/susfs.h']
+          for sf in susfs_files:
+              if os.path.exists(sf):
+                  print(f"[+] Found leftover: {sf}")
               else:
-                  # خطة بديلة للزرع
-                  content = content.replace(attr_match.group(0), backdoor_func + "\n" + attr_match.group(0))
-                  
-              # 3. تحويل العقدة إلى وضع القراءة والكتابة (RW)
-              content = re.sub(r'(static\s+)?DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr[^;]+;', 
-                               f'static DEVICE_ATTR(wcnss_mac_addr, 0664, {show_func}, engkr_mac_store);', content)
-              print("[+] SysFS Node made WRITABLE and linked to backdoor!")
+                  print(f"[-] Clean: {sf} not found.")
+
+          # 4. VFS LAYER ARCHITECTURE (THE CRITICAL BACKPORT TARGETS)
+          print("\n[4] VFS LAYER SIGNATURES (readdir & filldir_t vs dir_context)")
+          print("-" * 50)
+          print(find_function_signature('fs/readdir.c', 'int iterate_dir'))
+          print(find_function_signature('fs/readdir.c', 'int vfs_readdir'))
+          print(find_function_signature('include/linux/fs.h', 'typedef int (*filldir_t)'))
+          print(find_function_signature('include/linux/fs.h', 'struct dir_context'))
+
+          # 5. STAT & OPEN LAYER ARCHITECTURE
+          print("\n[5] STAT & OPEN SIGNATURES")
+          print("-" * 50)
+          print(find_function_signature('fs/stat.c', 'int vfs_getattr'))
+          print(find_function_signature('fs/open.c', 'long do_sys_open'))
+          
+          # 6. KSU HOOKS CHECK (Are hooks currently planted in VFS?)
+          print("\n[6] KSU HOOKS IN VFS")
+          print("-" * 50)
+          vfs_read = get_file_content('fs/read_write.c')
+          if 'ksu_handle_vfs_read' in vfs_read:
+              print("[+] KSU read hooks found in fs/read_write.c")
           else:
-              print("[-] Could not find wcnss_mac_addr DEVICE_ATTR!")
+              print("[-] No KSU read hooks in fs/read_write.c")
               
-          with open(target, 'w', encoding='utf-8') as f:
-              f.write(content)
-              
-          print("[+] WCNSS Direct Memory Patch Applied Successfully.")
+          exec_code = get_file_content('fs/exec.c')
+          if 'ksu_handle_execve' in exec_code:
+              print("[+] KSU execve hooks found in fs/exec.c")
+          else:
+              print("[-] No KSU execve hooks in fs/exec.c")
+
+          print_header("AUTOPSY COMPLETE")
           EOF
-          python3 patch_mac_backdoor.py
-
-      - name: Execute Kernel Build Script
-        run: |
-          chmod -R +x scripts/ || true
-          chmod -R +x AnyKernel3/ || true
-          ./kernel_build_fixed.sh
-
-      - name: Upload Kernel Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ENGKR-YSL-KSU-SUSFS-Kernel
-          path: |
-            build/Image.gz-dtb
-            *.zip
+          python3 engkr_recon.py
