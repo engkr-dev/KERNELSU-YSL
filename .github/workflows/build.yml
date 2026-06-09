@@ -1,4 +1,4 @@
-name: Build ENGKR KSU v3.1.0 + SUSFS (The Ultimate Builder V13)
+name: Build ENGKR KSU v3.1.0 + SUSFS (The Absolute Path V14)
 
 on:
   workflow_dispatch:
@@ -25,21 +25,17 @@ jobs:
           apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
           ln -s /usr/bin/python2 /usr/bin/python || true
 
-      - name: 1. Fetch Toolchains
+      - name: 1. Fetch Toolchains (Absolute Path Strategy)
         run: |
-          echo "[*] Downloading GCC Toolchains..."
           mkdir -p toolchains/gcc64 toolchains/gcc32
           wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz -O gcc64.tar.gz
           tar -xf gcc64.tar.gz -C toolchains/gcc64
           wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz -O gcc32.tar.gz
           tar -xf gcc32.tar.gz -C toolchains/gcc32
           
-          # إعداد المسارات المطلقة
-          echo "$GITHUB_WORKSPACE/toolchains/gcc64/bin" >> $GITHUB_PATH
-          echo "$GITHUB_WORKSPACE/toolchains/gcc32/bin" >> $GITHUB_PATH
-          echo "ARCH=arm64" >> $GITHUB_ENV
-          echo "CROSS_COMPILE=aarch64-linux-android-" >> $GITHUB_ENV
-          echo "CROSS_COMPILE_ARM32=arm-linux-androideabi-" >> $GITHUB_ENV
+          # تعريف المسارات المطلقة لاستخدامها في Make
+          echo "GCC64=$PWD/toolchains/gcc64/bin/aarch64-linux-android-" >> $GITHUB_ENV
+          echo "GCC32=$PWD/toolchains/gcc32/bin/arm-linux-androideabi-" >> $GITHUB_ENV
 
       - name: 2. VFS Surgeon & Injection
         run: |
@@ -47,19 +43,17 @@ jobs:
           cat << 'EOF' > inject_vfs.py
           import os, re
           def inject_after_brace(file_path, func_pattern, hook_code):
-              if not os.path.exists(file_path): return False
+              if not os.path.exists(file_path): return
               with open(file_path, "r") as f: content = f.read()
-              if "ksu_handle" in content: return True
+              if "ksu_handle" in content: return
               match = re.search(func_pattern + r'\s*\{', content)
               if match:
                   brace_end = match.end()
                   content = content[:brace_end] + "\n" + hook_code + content[brace_end:]
                   with open(file_path, "w") as f: f.write(content)
-                  return True
-              return False
 
-          inject_after_brace("fs/open.c", r'long\s+do_sys_open\s*\([^)]*\)', "\n\textern bool ksu_vfs_open_hook; extern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode); if (unlikely(ksu_vfs_open_hook)) ksu_handle_open(&dfd, &filename, &flags, &mode);\n")
-          inject_after_brace("fs/exec.c", r'static\s+int\s+do_execveat_common\s*\([^)]*\)', "\n\textern bool ksu_execveat_hook; extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *ptr, int *flags); if (unlikely(ksu_execveat_hook)) ksu_handle_execveat(&fd, &filename, &bprm, &flags);\n")
+          inject_after_brace("fs/open.c", r'long\s+do_sys_open\s*\([^)]*\)', "\n\textern bool ksu_vfs_open_hook __attribute__((weak));\n\textern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode) __attribute__((weak));\n\tif (unlikely(ksu_vfs_open_hook)) ksu_handle_open(&dfd, &filename, &flags, &mode);\n")
+          inject_after_brace("fs/exec.c", r'static\s+int\s+do_execveat_common\s*\([^)]*\)', "\n\textern bool ksu_execveat_hook __attribute__((weak));\n\textern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *ptr, int *flags) __attribute__((weak));\n\tif (unlikely(ksu_execveat_hook)) ksu_handle_execveat(&fd, &filename, &bprm, &flags);\n")
           EOF
           python3 inject_vfs.py
           
@@ -78,17 +72,17 @@ jobs:
         run: |
           sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-ENGKR-KSU310-SUSFS"/g' arch/arm64/configs/ysl-perf_defconfig
           
-          # البناء الصامت المباشر
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- ysl-perf_defconfig
+          # البناء الصامت مع تمرير المسارات المطلقة
+          make ARCH=arm64 CROSS_COMPILE=$GCC64 CROSS_COMPILE_ARM32=$GCC32 ysl-perf_defconfig
           echo "CONFIG_KSU=y" >> .config
           echo "CONFIG_KSU_SUSFS=y" >> .config
           
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- -j$(nproc)
+          make ARCH=arm64 CROSS_COMPILE=$GCC64 CROSS_COMPILE_ARM32=$GCC32 -j$(nproc)
           
           mkdir -p build && cp arch/arm64/boot/Image.gz-dtb build/
 
       - name: 4. Upload
         uses: actions/upload-artifact@v4
         with:
-          name: ENGKR-YSL-KSU-FINAL-V13
+          name: ENGKR-YSL-KSU-FINAL-V14
           path: build/Image.gz-dtb
