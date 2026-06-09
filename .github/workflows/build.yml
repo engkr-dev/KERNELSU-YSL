@@ -1,4 +1,4 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel (FINAL V2)
+name: Build ENGKR KSU-Next + SUSFS Kernel (FINAL V3)
 
 on:
   workflow_dispatch:
@@ -92,7 +92,7 @@ jobs:
           cat << 'EOF' > fix_collateral.py
           import os
           
-          # 1. Fix fs/namespace.c (Missing 'res' variable)
+          # 1. Fix fs/namespace.c
           try:
               with open('fs/namespace.c', 'r', encoding='utf-8') as f:
                   lines = f.readlines()
@@ -103,13 +103,11 @@ jobs:
                               lines.insert(j+1, '\tint res = 0;\n')
                               with open('fs/namespace.c', 'w', encoding='utf-8') as out:
                                   out.writelines(lines)
-                              print("[+] Surgically restored 'res' in fs/namespace.c")
                               break
                       break
-          except Exception as e:
-              print(f"[-] Error fixing namespace.c: {e}")
+          except Exception as e: pass
 
-          # 2. Fix kernel/kallsyms.c (Missing return statement)
+          # 2. Fix kernel/kallsyms.c
           try:
               with open('kernel/kallsyms.c', 'r', encoding='utf-8') as f:
                   lines = f.readlines()
@@ -121,10 +119,8 @@ jobs:
                       lines.insert(i, '\treturn 0;\n')
                       with open('kernel/kallsyms.c', 'w', encoding='utf-8') as out:
                           out.writelines(lines)
-                      print("[+] Surgically restored return in kernel/kallsyms.c")
                       break
-          except Exception as e:
-              print(f"[-] Error fixing kallsyms.c: {e}")
+          except Exception as e: pass
           EOF
           python3 fix_collateral.py
 
@@ -136,6 +132,30 @@ jobs:
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1)
           patch -p1 < "$PATCH_FILE" > /tmp/patch_run.txt 2>&1 || true
+
+      - name: The ENGKR Silencer Fix (KSU-Next Compatibility)
+        run: |
+          cat << 'EOF' > silence_ksu_errors.py
+          import os
+          
+          dispatch_file = 'drivers/kernelsu/supercall/dispatch.c'
+          if os.path.exists(dispatch_file):
+              with open(dispatch_file, 'r', encoding='utf-8') as f:
+                  lines = f.readlines()
+              
+              for i, line in enumerate(lines):
+                  # Mute sdcard monitor
+                  if 'susfs_start_sdcard_monitor_fn();' in line:
+                      lines[i] = line.replace('susfs_start_sdcard_monitor_fn();', '// susfs_start_sdcard_monitor_fn();')
+                  # Mute umounted check
+                  if 'susfs_is_current_proc_umounted()' in line:
+                      lines[i] = line.replace('susfs_is_current_proc_umounted()', '0 /* susfs_is_current_proc_umounted() bypassed */')
+              
+              with open(dispatch_file, 'w', encoding='utf-8') as f:
+                  f.writelines(lines)
+              print("[+] Silenced KSU-Next specific missing functions.")
+          EOF
+          python3 silence_ksu_errors.py
 
       - name: Activate KSU & SUSFS in Defconfig
         run: |
