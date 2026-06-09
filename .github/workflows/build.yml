@@ -1,4 +1,4 @@
-name: Build ENGKR KSU v3.1.0 + SUSFS (The Manual Injection)
+name: Build ENGKR KSU v3.1.0 + SUSFS (The Final Locksmith)
 
 on:
   workflow_dispatch:
@@ -55,18 +55,32 @@ jobs:
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           patch -p1 < $(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1)
 
-      - name: 4. The Manual SUSFS Injection (Brute-Force Wiring)
+      - name: 4. The Surgical SUSFS Injection (Append Mode)
         run: |
-          echo "[*] Wiring SUSFS manually into KSU v3.1.0..."
+          echo "[*] Wiring SUSFS surgically into KSU v3.1.0..."
           cd /tmp/ksu_official
           
-          # حقن ملفات الهيدر (Header Injection) في ksu.c
-          sed -i '1i #ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif\n' kernel/ksu.c
+          # 1. إجبار استدعاء مكتبة susfs في ملف ksu.c الأساسي
+          sed -i '1s/^/#include <linux\/susfs.h>\n/' kernel/ksu.c
           
-          # حقن دالة تفعيل التخفي (susfs_sus_path) عند تحميل النواة
-          sed -i '/pr_info("KernelSU/a\ \n#ifdef CONFIG_KSU_SUSFS\n\tsusfs_sus_path();\n#endif\n' kernel/ksu.c
+          # 2. حقن دالة التشغيل في نهاية ملف ksu.c بدلاً من البحث عن سطر معين
+          cat << 'EOF' >> kernel/ksu.c
           
-          echo "[+] Manual Code Injection Successful!"
+          /* ENGKR SUSFS MANUAL INITIALIZATION HOOK */
+          static int __init engkr_ksu_susfs_init(void) {
+          #ifdef CONFIG_KSU_SUSFS
+              susfs_sus_path();
+              pr_info("ENGKR: SUSFS successfully injected and initialized.\n");
+          #endif
+              return 0;
+          }
+          late_initcall(engkr_ksu_susfs_init);
+          EOF
+          
+          # 3. إجبار المترجم على تجميع ملفات susfs مع KSU إذا كانت موجودة
+          echo "ccflags-y += -DCONFIG_KSU_SUSFS" >> kernel/Makefile
+          
+          echo "[+] Surgical Code Injection Successful!"
           cd $GITHUB_WORKSPACE
           
           echo "[*] Moving the patched KSU into VFS System (fs/kernelsu)..."
@@ -138,7 +152,7 @@ jobs:
           if [ ! -d "fs/kernelsu" ]; then echo "[-] FATAL: fs/kernelsu directory missing!"; exit 1; fi
           if ! grep -q "kernelsu" fs/Makefile; then echo "[-] FATAL: KSU not hooked in fs/Makefile!"; exit 1; fi
           if ! grep -q "32302" fs/kernelsu/Kbuild; then echo "[-] FATAL: Version 32302 not hardcoded in Kbuild!"; exit 1; fi
-          if ! grep -q "susfs_sus_path" fs/kernelsu/ksu.c; then echo "[-] FATAL: Manual SUSFS hook failed!"; exit 1; fi
+          if ! grep -q "engkr_ksu_susfs_init" fs/kernelsu/ksu.c; then echo "[-] FATAL: Surgical SUSFS hook failed!"; exit 1; fi
           if [ ! -f "fs/susfs.c" ] || [ ! -f "include/linux/susfs.h" ]; then echo "[-] FATAL: SUSFS core files missing!"; exit 1; fi
           if ! grep -q "engkr_mac_store" drivers/soc/qcom/wcnss/wcnss_wlan.c; then echo "[-] FATAL: MAC Backdoor missing!"; exit 1; fi
           
@@ -178,3 +192,4 @@ jobs:
           path: |
             build/Image.gz-dtb
             *.zip
+            
