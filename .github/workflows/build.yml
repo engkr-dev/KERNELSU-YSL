@@ -1,24 +1,36 @@
-name: ENGKR Source Recon V12 (Final Full Rehearsal)
+name: Build ENGKR KSU-Next + SUSFS Kernel (FINAL)
 
 on:
   workflow_dispatch:
 
 jobs:
-  kernel-rehearsal:
+  build-kernel:
     runs-on: ubuntu-latest
+    container: ubuntu:20.04
 
     steps:
+      - name: Fix Git Ownership & Install Basics
+        run: |
+          apt-get update
+          apt-get install -y git wget python3
+          git config --global --add safe.directory '*'
+
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
+      - name: Setup Build Environment (Dependencies)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
+          ln -s /usr/bin/python2 /usr/bin/python || true
+
       - name: The Ultimate Python Hack (Carpet Bombing KSU Constants)
         run: |
-          # 1. إزالة واجهة menuconfig
+          chmod +x kernel_build_fixed.sh || true
           sed -i '/menuconfig/d' kernel_build_fixed.sh || true
-          # 2. تخطي حاجز الإصدار للمترجم
           sed -i 's/# error Sorry, your version of GCC is too old - please use 5.1 or newer.//g' include/linux/compiler-gcc.h || true
           
-          # 3. سكربت الثوابت الخاص بـ KSU
           cat << 'EOF' > patch_ksu.py
           import os, re
           pattern = r'(?:static\s+)?const\s+[a-zA-Z0-9_ ]+\s+(KSU_[A-Z0-9_]+)\s*=\s*([^;]+);'
@@ -124,36 +136,16 @@ jobs:
           EOF
           python3 patch_mac_backdoor.py
 
-      - name: THE FINAL AUDIT (Proving everything is ready)
+      - name: Execute Kernel Build Script
         run: |
-          echo -e "\n============================================================"
-          echo "ENGKR FINAL REHEARSAL AUDIT (PRE-BUILD CHECK)"
-          echo "============================================================"
+          chmod -R +x scripts/ || true
+          chmod -R +x AnyKernel3/ || true
+          ./kernel_build_fixed.sh
 
-          echo -e "\n[1] MAC BACKDOOR CHECK:"
-          echo "--------------------------------------------------"
-          grep -C 2 "engkr_mac_store" drivers/soc/qcom/wcnss/wcnss_wlan.c || echo "[-] MAC Backdoor failed to inject!"
-
-          echo -e "\n[2] DEFCONFIG CHECK:"
-          echo "--------------------------------------------------"
-          tail -n 6 arch/arm64/configs/ysl-perf_defconfig
-
-          echo -e "\n[3] SUSFS PATCH CHECK:"
-          echo "--------------------------------------------------"
-          if [ -f "fs/susfs.c" ]; then echo "[+] fs/susfs.c is present."; else echo "[-] fs/susfs.c MISSING!"; fi
-          REJECTS=$(find . -name "*.rej")
-          if [ -z "$REJECTS" ]; then 
-              echo "[+] 0 REJECTS. Patch applied cleanly."
-          else 
-              echo "[-] REJECTS FOUND! Patch failed."
-              cat *.rej
-          fi
-
-          echo -e "\n[4] KSU CONSTANTS CHECK:"
-          echo "--------------------------------------------------"
-          # التأكد من تحويل الـ const إلى #define
-          grep -R "#define KSU_" drivers/kernelsu/ 2>/dev/null | head -n 3 || echo "[-] KSU Constants patch might have failed."
-
-          echo -e "\n============================================================"
-          echo "ALL SYSTEMS INSPECTED."
-          echo "============================================================"
+      - name: Upload Ultimate Kernel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ENGKR-YSL-SUSFS-Kernel
+          path: |
+            build/Image.gz-dtb
+            *.zip
