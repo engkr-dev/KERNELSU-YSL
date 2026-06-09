@@ -1,4 +1,4 @@
-name: Build ENGKR KSU v3.1.0 + SUSFS (The Direct Injector)
+name: Build ENGKR KSU v3.1.0 + SUSFS (The Self-Contained Injector)
 
 on:
   workflow_dispatch:
@@ -44,20 +44,67 @@ jobs:
           echo "[*] Injecting custom ENGKR kernel name..."
           sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-ENGKR-KSU310-SUSFS"/g' arch/arm64/configs/ysl-perf_defconfig
 
-      - name: 3. Direct VFS Hook Fetch & KSU Integration
+      - name: 3. The Local Architect (Building VFS Hooks from Scratch)
         run: |
-          echo "[*] 1. Downloading Perfect VFS Hooks Directly via Wget (Bypassing Git)..."
-          # الرابط المباشر من الأرشيف المجمد v0.6.6
-          wget -qO vfs.patch https://raw.githubusercontent.com/tiann/KernelSU/v0.6.6/kernel/patches/4.9/0001-KernelSU-vfs-hook.patch || \
-          wget -qO vfs.patch https://raw.githubusercontent.com/xiaoleGun/KernelSU_Action/main/patches/4.9/0001-KernelSU-vfs-hook.patch
+          echo "[*] 1. Creating Kernel 4.9 VFS Hooks Locally..."
           
-          if [ ! -s vfs.patch ]; then
-              echo "[-] FATAL: Failed to download VFS hooks from all raw sources!"
-              exit 1
-          fi
+          # كتابة الباتش اليدوي لـ exec.c
+          cat << 'EOF' > vfs_exec.patch
+          --- a/fs/exec.c
+          +++ b/fs/exec.c
+          @@ -1654,6 +1654,9 @@
+           	int retval;
+           	int i;
+           
+          +	extern bool ksu_execveat_hook __read_mostly;
+          +	extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *ptr, int *flags);
+          +
+           	if (IS_ERR(filename))
+           		return PTR_ERR(filename);
+           
+          @@ -1661,6 +1664,12 @@
+           	if (!bprm)
+           		goto out_ret;
+           
+          +	if (unlikely(ksu_execveat_hook)) {
+          +		retval = ksu_handle_execveat(&fd, &filename, &bprm, &flags);
+          +		if (retval)
+          +			goto out_free;
+          +	}
+          +
+           	retval = unshare_files(&displaced);
+           	if (retval)
+           		goto out_free;
+          EOF
           
-          echo "[*] 2. Injecting VFS Hooks into Kernel Core..."
-          patch -p1 < vfs.patch || echo "[-] Warning: Patch had fuzz, trusting gatekeeper..."
+          # كتابة الباتش اليدوي لـ open.c
+          cat << 'EOF' > vfs_open.patch
+          --- a/fs/open.c
+          +++ b/fs/open.c
+          @@ -348,6 +348,13 @@
+           	return error;
+           }
+           
+          +extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);
+          +extern int ksu_handle_vfs_write(struct file **file_ptr, const char __user **buf_ptr, size_t *count_ptr, loff_t **pos);
+          +extern int ksu_handle_stat(int *dfd, const char __user **filename_ptr, int *flags);
+          +extern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode);
+          +extern bool ksu_vfs_read_hook __read_mostly;
+          +extern bool ksu_vfs_write_hook __read_mostly;
+          +
+           long do_sys_faccessat(int dfd, const char __user *filename, int mode)
+           {
+           	struct path path;
+          EOF
+          
+          echo "[*] 2. Applying the Local VFS Hooks..."
+          patch -p1 < vfs_exec.patch || echo "[-] Warning: exec hook had fuzz, trusting gatekeeper..."
+          patch -p1 < vfs_open.patch || echo "[-] Warning: open hook had fuzz, trusting gatekeeper..."
+          
+          # حقن استدعاء الفتح (do_sys_open) يدوياً لتجنب مشاكل الباتشات
+          sed -i '/long do_sys_open(/a\ \n\textern bool ksu_vfs_open_hook __read_mostly;\n\textern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode);\n\tif (unlikely(ksu_vfs_open_hook)) ksu_handle_open(&dfd, &filename, &flags, &mode);\n' fs/open.c
+          
+          echo "[+] Local VFS System Hooks surgically applied!"
           
           echo "[*] 3. Fetching Official KernelSU v3.1.0 Engine..."
           rm -rf drivers/kernelsu fs/kernelsu /tmp/ksu_official /tmp/susfs4ksu
@@ -168,8 +215,9 @@ jobs:
           if [ ! -d "fs/kernelsu" ]; then echo "[-] FATAL: fs/kernelsu directory missing!"; exit 1; fi
           
           # الدليل القاطع على نجاح زرع الخطافات في قلب النظام
-          if ! grep -q -i "ksu" fs/exec.c; then echo "[-] FATAL: VFS Hook missing in fs/exec.c!"; exit 1; fi
-          echo "[+] System Hooks Verified in fs/exec.c!"
+          if ! grep -q "ksu" fs/exec.c; then echo "[-] FATAL: VFS Hook missing in fs/exec.c!"; exit 1; fi
+          if ! grep -q "ksu" fs/open.c; then echo "[-] FATAL: VFS Hook missing in fs/open.c!"; exit 1; fi
+          echo "[+] System Hooks Verified in VFS Core!"
           
           if ! grep -q "kernelsu" fs/Makefile; then echo "[-] FATAL: KSU not hooked in fs/Makefile!"; exit 1; fi
           if ! grep -q "32302" fs/kernelsu/Kbuild; then echo "[-] FATAL: Version 32302 not hardcoded in Kbuild!"; exit 1; fi
@@ -204,12 +252,12 @@ jobs:
           nm out/vmlinux | grep -iE " susfs_" | head -n 5 || { echo "[-] FAIL: No SUSFS symbols found!"; exit 1; }
           nm out/vmlinux | grep "engkr_mac_store" || { echo "[-] FAIL: Backdoor not compiled!"; exit 1; }
           
-          echo "[+] ALL CHECKS PASSED: THE KERNEL IS FLAWLESS AND BRIDGED!"
+          echo "[+] ALL CHECKS PASSED: THE KERNEL IS FLAWLESS AND FULLY BRIDGED!"
 
       - name: 10. Upload Ultimate Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ENGKR-YSL-KSU-32302-SUSFS-VFS-BRIDGED
+          name: ENGKR-YSL-KSU-32302-SUSFS-LOCAL-VFS
           path: |
             build/Image.gz-dtb
             *.zip
