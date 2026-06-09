@@ -1,4 +1,4 @@
-name: ENGKR Source Recon V8 (Reject Analyzer)
+name: ENGKR Source Recon V8.1 (Reject Analyzer Fix)
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ jobs:
       - name: ENGKR SUSFS Reject Analyzer
         run: |
           echo -e "\n============================================================"
-          echo "ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 8"
+          echo "ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 8.1"
           echo "============================================================"
 
           echo -e "\n[1] PREPARING ENVIRONMENT"
@@ -29,9 +29,10 @@ jobs:
               PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.14.patch" | head -n 1)
           fi
 
-          echo -e "\n[2] APPLYING PATCH (EXPECTING FAILURES)"
+          echo -e "\n[2] APPLYING PATCH (IGNORING GITHUB ERRORS)"
           echo "--------------------------------------------------"
-          patch -p1 < "$PATCH_FILE" > /tmp/patch_run.txt 2>&1
+          # إضافة || true لمنع الجيت هب من قتل السكربت عند فشل الباتش
+          patch -p1 < "$PATCH_FILE" > /tmp/patch_run.txt 2>&1 || true
           
           echo -e "\n[3] ANALYZING REJECT FILES (.rej)"
           echo "--------------------------------------------------"
@@ -62,5 +63,5 @@ jobs:
           fi
 
           echo -e "\n============================================================"
-          echo "STAGE 8 COMPLETE"
+          echo "STAGE 8.1 COMPLETE"
           echo "============================================================"
