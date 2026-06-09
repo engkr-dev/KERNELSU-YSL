@@ -1,4 +1,4 @@
-name: Build ENGKR KSU v3.1.0 + SUSFS (The VFS Surgeon)
+name: Build ENGKR KSU v3.1.0 + SUSFS (The Tactical Surgeon)
 
 on:
   workflow_dispatch:
@@ -44,46 +44,47 @@ jobs:
           echo "[*] Injecting custom ENGKR kernel name..."
           sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-ENGKR-KSU310-SUSFS"/g' arch/arm64/configs/ysl-perf_defconfig
 
-      - name: 3. The Python VFS Surgeon (Syntax-Perfect Hooks)
+      - name: 3. The Python VFS Surgeon (Tactical Scope)
         run: |
           echo "[*] Injecting VFS Hooks locally using Python..."
           cat << 'EOF' > inject_vfs.py
           import os
 
-          def inject(file_path, externs, anchor, hook):
+          def inject(file_path, anchor, hook):
               if not os.path.exists(file_path): return
               with open(file_path, "r") as f: content = f.read()
-              if "ksu_vfs" in content or "ksu_exec" in content: return
-              content = externs + "\n" + content
-              content = content.replace(anchor, hook + "\n" + anchor, 1)
+              if "ksu_handle" in content: return
+              
+              # حقن الهيدر لضمان تعريف كلمة bool
+              if "#include <linux/types.h>" not in content:
+                  content = "#include <linux/types.h>\n" + content
+                  
+              content = content.replace(anchor, hook + "\n\t" + anchor, 1)
               with open(file_path, "w") as f: f.write(content)
 
-          # 1. fs/open.c
+          # 1. fs/open.c (الحقن داخل الدالة بدلاً من خارجها)
           inject("fs/open.c",
-          "extern bool ksu_vfs_open_hook __read_mostly;\nextern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode);",
-          "\tif (fd)\n\t\treturn fd;",
-          "\tif (unlikely(ksu_vfs_open_hook))\n\t\tksu_handle_open(&dfd, &filename, &flags, &mode);\n")
+          "if (fd)\n\t\treturn fd;",
+          "\n\t/* KSU VFS Open Hook */\n\textern bool ksu_vfs_open_hook __attribute__((weak));\n\textern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode) __attribute__((weak));\n\tif (unlikely(ksu_vfs_open_hook && ksu_handle_open)) {\n\t\tksu_handle_open(&dfd, &filename, &flags, &mode);\n\t}\n")
 
           # 2. fs/exec.c
           inject("fs/exec.c",
-          "extern bool ksu_execveat_hook __read_mostly;\nextern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *ptr, int *flags);",
-          "\tretval = unshare_files(&displaced);",
-          "\tif (unlikely(ksu_execveat_hook)) {\n\t\tretval = ksu_handle_execveat(&fd, &filename, &bprm, &flags);\n\t\tif (retval)\n\t\t\tgoto out_free;\n\t}\n")
+          "retval = unshare_files(&displaced);",
+          "\n\t/* KSU Exec Hook */\n\textern bool ksu_execveat_hook __attribute__((weak));\n\textern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *ptr, int *flags) __attribute__((weak));\n\tif (unlikely(ksu_execveat_hook && ksu_handle_execveat)) {\n\t\tretval = ksu_handle_execveat(&fd, &filename, &bprm, &flags);\n\t\tif (retval) goto out_free;\n\t}\n")
 
           # 3. fs/read_write.c
           if os.path.exists("fs/read_write.c"):
               with open("fs/read_write.c", "r") as f: content = f.read()
-              if "ksu_vfs" not in content:
-                  content = "extern bool ksu_vfs_read_hook __read_mostly;\nextern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\nextern bool ksu_vfs_write_hook __read_mostly;\nextern int ksu_handle_vfs_write(struct file **file_ptr, const char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n" + content
-                  content = content.replace("\tif (!(file->f_mode & FMODE_CAN_READ))", "\tif (unlikely(ksu_vfs_read_hook))\n\t\tksu_handle_vfs_read(&file, &buf, &count, &pos);\n\n\tif (!(file->f_mode & FMODE_CAN_READ))", 1)
-                  content = content.replace("\tif (!(file->f_mode & FMODE_CAN_WRITE))", "\tif (unlikely(ksu_vfs_write_hook))\n\t\tksu_handle_vfs_write(&file, &buf, &count, &pos);\n\n\tif (!(file->f_mode & FMODE_CAN_WRITE))", 1)
+              if "ksu_handle_vfs_read" not in content:
+                  if "#include <linux/types.h>" not in content: content = "#include <linux/types.h>\n" + content
+                  content = content.replace("if (!(file->f_mode & FMODE_CAN_READ))", "extern bool ksu_vfs_read_hook __attribute__((weak));\n\textern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos) __attribute__((weak));\n\tif (unlikely(ksu_vfs_read_hook && ksu_handle_vfs_read)) ksu_handle_vfs_read(&file, &buf, &count, &pos);\n\n\tif (!(file->f_mode & FMODE_CAN_READ))", 1)
+                  content = content.replace("if (!(file->f_mode & FMODE_CAN_WRITE))", "extern bool ksu_vfs_write_hook __attribute__((weak));\n\textern int ksu_handle_vfs_write(struct file **file_ptr, const char __user **buf_ptr, size_t *count_ptr, loff_t **pos) __attribute__((weak));\n\tif (unlikely(ksu_vfs_write_hook && ksu_handle_vfs_write)) ksu_handle_vfs_write(&file, &buf, &count, &pos);\n\n\tif (!(file->f_mode & FMODE_CAN_WRITE))", 1)
                   with open("fs/read_write.c", "w") as f: f.write(content)
 
           # 4. fs/stat.c
           inject("fs/stat.c",
-          "extern bool ksu_vfs_stat_hook __read_mostly;\nextern int ksu_handle_stat(int *dfd, const char __user **filename_ptr, int *flags);",
-          "\tunsigned int lookup_flags = 0;",
-          "\tunsigned int lookup_flags = 0;\n\n\tif (unlikely(ksu_vfs_stat_hook))\n\t\tksu_handle_stat(&dfd, &filename, &flag);\n")
+          "unsigned int lookup_flags = 0;",
+          "extern bool ksu_vfs_stat_hook __attribute__((weak));\n\textern int ksu_handle_stat(int *dfd, const char __user **filename_ptr, int *flags) __attribute__((weak));\n\tif (unlikely(ksu_vfs_stat_hook && ksu_handle_stat)) ksu_handle_stat(&dfd, &filename, &flag);\n\n\t")
           
           print("[+] Python VFS Injector Finished Successfully!")
           EOF
@@ -197,7 +198,6 @@ jobs:
           echo "============================================================"
           if [ ! -d "fs/kernelsu" ]; then echo "[-] FATAL: fs/kernelsu directory missing!"; exit 1; fi
           
-          # الدليل القاطع على نجاح الجراح الآلي
           if ! grep -q "ksu_vfs_open_hook" fs/open.c; then echo "[-] FATAL: VFS Hook missing in fs/open.c!"; exit 1; fi
           if ! grep -q "ksu_execveat_hook" fs/exec.c; then echo "[-] FATAL: VFS Hook missing in fs/exec.c!"; exit 1; fi
           echo "[+] System Hooks Verified in VFS Core!"
@@ -240,7 +240,7 @@ jobs:
       - name: 10. Upload Ultimate Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ENGKR-YSL-KSU-32302-SUSFS-SURGEON
+          name: ENGKR-YSL-KSU-32302-SUSFS-TACTICAL
           path: |
             build/Image.gz-dtb
             *.zip
