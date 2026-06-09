@@ -1,4 +1,4 @@
-name: Build ENGKR KSU v3.1.0 + SUSFS (The Final Master Builder)
+name: Build ENGKR KSU v3.1.0 + SUSFS (The Direct Builder V12)
 
 on:
   workflow_dispatch:
@@ -25,63 +25,66 @@ jobs:
           apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
           ln -s /usr/bin/python2 /usr/bin/python || true
 
-      - name: 1. Setup Toolchain Paths
+      - name: 1. Fetch Toolchains (Direct Download)
         run: |
-          # تنزيل الأدوات (كما يفعل السكربت القديم)
-          git clone --depth=1 https://github.com/aosp-mirror/platform_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 aarch64-linux-android-4.9
-          git clone --depth=1 https://github.com/aosp-mirror/platform_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 arm-linux-androideabi-4.9
+          echo "[*] Downloading GCC 4.9 Toolchains (No Git)..."
+          wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz -O gcc64.tar.gz
+          mkdir aarch64-linux-android-4.9 && tar -xf gcc64.tar.gz -C aarch64-linux-android-4.9
           
-          # تصدير المسارات الحيوية
+          wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz -O gcc32.tar.gz
+          mkdir arm-linux-androideabi-4.9 && tar -xf gcc32.tar.gz -C arm-linux-androideabi-4.9
+          
           echo "$GITHUB_WORKSPACE/aarch64-linux-android-4.9/bin" >> $GITHUB_PATH
           echo "$GITHUB_WORKSPACE/arm-linux-androideabi-4.9/bin" >> $GITHUB_PATH
-          
           echo "ARCH=arm64" >> $GITHUB_ENV
           echo "CROSS_COMPILE=aarch64-linux-android-" >> $GITHUB_ENV
 
       - name: 2. VFS Surgeon & Injection
         run: |
-          # Laser Purge
           sed -i '/kernelsu/d' drivers/Makefile drivers/Kconfig fs/Makefile fs/Kconfig || true
           
-          # Injection
           cat << 'EOF' > inject_vfs.py
-          import os
-          def inject(file_path, pattern, hook):
-              if not os.path.exists(file_path): return
+          import os, re
+          def inject_after_brace(file_path, func_pattern, hook_code):
+              if not os.path.exists(file_path): return False
               with open(file_path, "r") as f: content = f.read()
-              if "ksu_handle" not in content:
-                  content = re.sub(pattern, lambda m: m.group(0) + "\n\t" + hook, content)
+              if "ksu_handle" in content: return True
+              if "#include <linux/types.h>" not in content: content = "#include <linux/types.h>\n" + content
+              match = re.search(func_pattern + r'\s*\{', content)
+              if match:
+                  brace_end = match.end()
+                  content = content[:brace_end] + "\n" + hook_code + content[brace_end:]
                   with open(file_path, "w") as f: f.write(content)
-          import re
-          inject("fs/open.c", r'long\s+do_sys_open\s*\([^)]*\)\s*\{', "\n\textern bool ksu_vfs_open_hook; extern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode); if (unlikely(ksu_vfs_open_hook)) ksu_handle_open(&dfd, &filename, &flags, &mode);")
-          inject("fs/exec.c", r'static\s+int\s+do_execveat_common\s*\([^)]*\)\s*\{', "\n\textern bool ksu_execveat_hook; extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *ptr, int *flags); if (unlikely(ksu_execveat_hook)) ksu_handle_execveat(&fd, &filename, &bprm, &flags);")
+                  return True
+              return False
+
+          inject_after_brace("fs/open.c", r'long\s+do_sys_open\s*\([^)]*\)', "\n\textern bool ksu_vfs_open_hook __attribute__((weak));\n\textern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode) __attribute__((weak));\n\tif (unlikely(ksu_vfs_open_hook)) ksu_handle_open(&dfd, &filename, &flags, &mode);\n")
+          inject_after_brace("fs/exec.c", r'static\s+int\s+do_execveat_common\s*\([^)]*\)', "\n\textern bool ksu_execveat_hook __attribute__((weak));\n\textern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *ptr, int *flags) __attribute__((weak));\n\tif (unlikely(ksu_execveat_hook)) ksu_handle_execveat(&fd, &filename, &bprm, &flags);\n")
           EOF
           python3 inject_vfs.py
           
           git clone -b v3.1.0 https://github.com/tiann/KernelSU.git /tmp/ksu_official
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
           patch -p1 < $(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1) || true
+          
           cp -r /tmp/ksu_official/kernel fs/kernelsu
           echo "obj-\$(CONFIG_KSU) += kernelsu/" >> fs/Makefile
+          echo 'source "fs/kernelsu/Kconfig"' >> fs/Kconfig
+          sed -i '1s/^/#include <linux\/susfs.h>\n/' fs/kernelsu/ksu.c
+          echo -e "\nstatic int __init engkr_ksu_susfs_init(void) { #ifdef CONFIG_KSU_SUSFS\n\tsusfs_sus_path();\n#endif\n\treturn 0; }\nlate_initcall(engkr_ksu_susfs_init);" >> fs/kernelsu/ksu.c
           echo "ccflags-y += -DCONFIG_KSU_SUSFS -DKSU_VERSION=32302" >> fs/kernelsu/Kbuild
 
-      - name: 3. Production Build (Manual & Silent)
+      - name: 3. Production Build
         run: |
-          # إنشاء الإعدادات بدون Menuconfig (الصمت التام)
+          sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-ENGKR-KSU310-SUSFS"/g' arch/arm64/configs/ysl-perf_defconfig
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- ysl-perf_defconfig
-          
-          # إضافة إعدادات KSU و SUSFS يدوياً
           echo "CONFIG_KSU=y" >> .config
           echo "CONFIG_KSU_SUSFS=y" >> .config
-          
-          # البناء المباشر
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- -j$(nproc)
-          
-          # تعبئة الناتج
           mkdir -p build && cp arch/arm64/boot/Image.gz-dtb build/
 
       - name: 4. Upload
         uses: actions/upload-artifact@v4
         with:
-          name: ENGKR-YSL-KSU-FINAL-BUILD
+          name: ENGKR-YSL-KSU-FINAL-DIRECT
           path: build/Image.gz-dtb
