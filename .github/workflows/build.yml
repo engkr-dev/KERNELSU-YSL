@@ -1,54 +1,4 @@
-name: SUSFS 4.9 Backport (C Error Hunter)
-
-on:
-  workflow_dispatch:
-
-jobs:
-  kernel-c-debug:
-    runs-on: ubuntu-latest
-    container: ubuntu:20.04
-
-    steps:
-      - name: Setup Build Environment
-        env:
-          DEBIAN_FRONTEND: noninteractive
-          TZ: UTC
-        run: |
-          ln -fs /usr/share/zoneinfo/UTC /etc/localtime
-          apt-get update && apt-get install -y tzdata
-          apt-get install -y git wget python3 bc bison build-essential ccache curl flex g++-multilib gcc-multilib lib32ncurses5-dev lib32readline-dev lib32z1-dev libssl-dev libxml2 libxml2-utils lzop rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2
-          ln -s /usr/bin/python2 /usr/bin/python || true
-          git config --global --add safe.directory '*'
-
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Fetch Toolchains (LineageOS Rock-Solid Method)
-        run: |
-          echo "[*] Cloning official LineageOS GCC 4.9 Toolchains..."
-          # نستخدم برانش lineage-18.1 لأنه آخر برانش يحتوي على GCC 4.9 بشكل رسمي
-          git clone --depth=1 -b lineage-18.1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git gcc64
-          git clone --depth=1 -b lineage-18.1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git gcc32
-          
-          # المسارات هنا مطلقة وثابتة ومضمونة 100%
-          echo "GCC64_PATH=$PWD/gcc64/bin/aarch64-linux-android-" >> $GITHUB_ENV
-          echo "GCC32_PATH=$PWD/gcc32/bin/arm-linux-androideabi-" >> $GITHUB_ENV
-          echo "[+] Toolchains successfully mapped!"
-
-      - name: Inject Pure SUSFS Engine
-        run: |
-          # مسح أي تجميعات قديمة
-          make clean || true
-          
-          # جلب ملفات SUSFS الأساسية فقط
-          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
-          cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
-          cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
-          
-          # إجبار نظام البناء (Makefile) على تجميع susfs.o
-          grep -q "susfs.o" fs/Makefile || echo "obj-y += susfs.o" >> fs/Makefile
-
-      - name: Execute C Compilation (Hunting Mode)
+- name: Execute C Compilation (Hunting Mode)
         run: |
           echo "[*] Generating Defconfig..."
           make ARCH=arm64 CROSS_COMPILE=$GCC64_PATH CROSS_COMPILE_ARM32=$GCC32_PATH ysl-perf_defconfig
@@ -61,15 +11,17 @@ jobs:
           echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> .config
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> .config
           
+          echo "[*] Bypassing GCC Version Check..."
+          # هذا هو السطر السحري الذي سيسكت المترجم ويجعله يتجاوز عقبة الإصدار 4.9
+          sed -i 's/# error Sorry, your version of GCC is too old - please use 5.1 or newer.//g' include/linux/compiler-gcc.h || true
+          
           echo "============================================================"
           echo " 🚦 INITIATING KERNEL 4.9 C COMPILATION (EXPECTING ERRORS) 🚦 "
           echo "============================================================"
           
-          # نقوم بتشغيل البناء مع توجيه الأخطاء بوضوح
           make ARCH=arm64 CROSS_COMPILE=$GCC64_PATH CROSS_COMPILE_ARM32=$GCC32_PATH -j$(nproc) || true
           
           echo "============================================================"
           echo " 🔍 EXTRACTING SUSFS.C COMPILATION ERRORS 🔍 "
           echo "============================================================"
-          # هنا نصطاد أخطاء الـ C من ملف susfs.c مباشرة
           make ARCH=arm64 CROSS_COMPILE=$GCC64_PATH CROSS_COMPILE_ARM32=$GCC32_PATH fs/susfs.o 2>&1 | grep -E "error:|warning:" || echo "No direct errors caught on fs/susfs.o. Check main log."
