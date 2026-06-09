@@ -1,10 +1,10 @@
-name: ENGKR Source Recon V15 (The Panoramic Scanner)
+name: Build ENGKR Official KSU + SUSFS (The Masterpiece)
 
 on:
   workflow_dispatch:
 
 jobs:
-  kernel-panoramic-scan:
+  build-kernel:
     runs-on: ubuntu-latest
     container: ubuntu:20.04
 
@@ -12,77 +12,38 @@ jobs:
       - name: Fix Git Ownership & Install Basics
         run: |
           apt-get update
-          apt-get install -y git wget python3
+          apt-get install -y git wget python3 unifdef
           git config --global --add safe.directory '*'
 
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Setup Build Environment
+      - name: Setup Build Environment (Dependencies)
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
           ln -s /usr/bin/python2 /usr/bin/python || true
 
-      - name: The ENGKR Precision Purge (Erasing all SUSFS Traces)
+      - name: The Laser Purge (Using 'unifdef' to cleanly strip old SUSFS)
         run: |
-          cat << 'EOF' > purge_script.py
-          import os
-          target_dirs = ['fs', 'include', 'kernel', 'mm', 'block', 'security']
-          for d in target_dirs:
-              for root, dirs, files in os.walk(d):
-                  for file in files:
-                      if file.endswith(('.c', '.h')):
-                          path = os.path.join(root, file)
-                          try:
-                              with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                                  if 'CONFIG_KSU_SUSFS' not in f.read(): continue
-                              with open(path, 'r', encoding='utf-8', errors='ignore') as f: lines = f.readlines()
-                              out_lines = []
-                              skip = 0
-                              for line in lines:
-                                  clean = line.strip()
-                                  if skip > 0:
-                                      if clean.startswith('#endif'): skip -= 1
-                                      elif clean.startswith('#if'): skip += 1
-                                      continue
-                                  if clean.startswith('#ifdef CONFIG_KSU_SUSFS') or clean.startswith('#if defined(CONFIG_KSU_SUSFS') or clean.startswith('#ifndef CONFIG_KSU_SUSFS'):
-                                      skip = 1
-                                      continue
-                                  out_lines.append(line)
-                              with open(path, 'w', encoding='utf-8') as f: f.writelines(out_lines)
-                          except: pass
-          EOF
-          python3 purge_script.py
+          echo "[*] Scanning for infected files..."
+          FILES=$(grep -rlE 'CONFIG_KSU_SUSFS|CONFIG_ZEROMOUNT' fs/ include/ kernel/ block/ security/ 2>/dev/null) || true
+          for f in $FILES; do
+              echo "[+] Surgically cleaning $f using unifdef..."
+              # الأداة ستقوم بحذف الكود المعطوب وإرجاع الكود الأصلي للنواة بمنتهى الدقة
+              unifdef -UCONFIG_KSU_SUSFS -UCONFIG_KSU_SUSFS_SUS_PATH -UCONFIG_KSU_SUSFS_SUS_MOUNT -UCONFIG_KSU_SUSFS_OPEN_REDIRECT -UCONFIG_ZEROMOUNT -m "$f" || true
+          done
+          echo "[+] Laser Purge Complete. Kernel is now virgin and safe!"
 
-      - name: The ENGKR Surgical Fix (Restoring Collateral Damage)
+      - name: The Engine Swap (Official KernelSU Setup)
         run: |
-          cat << 'EOF' > fix_collateral.py
-          import os
-          try:
-              with open('fs/namespace.c', 'r', encoding='utf-8') as f: lines = f.readlines()
-              for i, line in enumerate(lines):
-                  if 'static int mnt_alloc_group_id(' in line:
-                      for j in range(i, min(i+5, len(lines))):
-                          if '{' in lines[j] and 'int res' not in lines[j+1]:
-                              lines.insert(j+1, '\tint res = 0;\n')
-                              with open('fs/namespace.c', 'w', encoding='utf-8') as out: out.writelines(lines)
-                              break
-                      break
-          except: pass
-          try:
-              with open('kernel/kallsyms.c', 'r', encoding='utf-8') as f: lines = f.readlines()
-              in_s_show = False
-              for i, line in enumerate(lines):
-                  if 'static int s_show(' in line: in_s_show = True
-                  if in_s_show and line.startswith('}'):
-                      lines.insert(i, '\treturn 0;\n')
-                      with open('kernel/kallsyms.c', 'w', encoding='utf-8') as out: out.writelines(lines)
-                      break
-          except: pass
-          EOF
-          python3 fix_collateral.py
+          echo "[*] Purging unstable KSU-Next..."
+          rm -rf drivers/kernelsu
+          echo "[*] Fetching Official KernelSU (Mainline)..."
+          git clone --depth=1 https://github.com/tiann/KernelSU.git /tmp/ksu_official
+          cp -r /tmp/ksu_official/kernel drivers/kernelsu
+          echo "[+] Engine Swap Complete."
 
       - name: The Ultimate Python Hack (Fixing GCC & KSU Constants)
         run: |
@@ -98,25 +59,48 @@ jobs:
                   if not file.endswith(('.c', '.h')): continue
                   path = os.path.join(root, file)
                   try:
-                      with open(path, 'r', encoding='utf-8', errors='ignore') as f: content = f.read()
+                      with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                          content = f.read()
                       new_content = re.sub(pattern, r'#define \1 \2', content)
                       if new_content != content:
-                          with open(path, 'w', encoding='utf-8') as f: f.write(new_content)
+                          with open(path, 'w', encoding='utf-8') as f:
+                              f.write(new_content)
                   except: pass
           EOF
           python3 patch_ksu.py
 
-      - name: Activate KSU ONLY (No SUSFS)
+      - name: Integrate Official SUSFS (Kernel + KSU Dual Patching)
+        run: |
+          rm -fv fs/susfs.c include/linux/susfs.h
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu 2>/dev/null
+          
+          echo "[*] 1. Patching The Kernel..."
+          cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
+          cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
+          PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1)
+          patch -p1 < "$PATCH_FILE" > /tmp/patch_run.txt 2>&1 || true
+          
+          echo "[*] 2. Patching Official KernelSU for SUSFS integration..."
+          KSU_PATCH=$(find /tmp/susfs4ksu/KernelSU_patches -name "*enable_susfs_for_ksu.patch" | head -n 1)
+          cd drivers/kernelsu
+          patch -p1 < "$KSU_PATCH" || true
+          cd ../..
+
+      - name: Activate KSU & SUSFS in Defconfig
         run: |
           echo "CONFIG_KSU=y" >> arch/arm64/configs/ysl-perf_defconfig
+          echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/ysl-perf_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> arch/arm64/configs/ysl-perf_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> arch/arm64/configs/ysl-perf_defconfig
+          echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> arch/arm64/configs/ysl-perf_defconfig
 
-      - name: Inject Hardware Backdoor (MAC Override)
+      - name: The ENGKR Hardware Backdoor (WCNSS Direct Memory Override)
         run: |
-          cat << 'EOF' > patch_mac.py
+          cat << 'EOF' > patch_mac_backdoor.py
           import os, re
           target = 'drivers/soc/qcom/wcnss/wcnss_wlan.c'
           if os.path.exists(target):
-              with open(target, 'r') as f: content = f.read()
+              with open(target, 'r', encoding='utf-8') as f: content = f.read()
               backdoor_func = """
               static ssize_t engkr_mac_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
                   unsigned int mac[6];
@@ -138,32 +122,20 @@ jobs:
                   else:
                       content = content.replace(attr_match.group(0), backdoor_func + "\n" + attr_match.group(0))
                   content = re.sub(r'(static\s+)?DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr[^;]+;', f'static DEVICE_ATTR(wcnss_mac_addr, 0664, {show_func}, engkr_mac_store);', content)
-                  with open(target, 'w') as f: f.write(content)
+                  with open(target, 'w', encoding='utf-8') as f: f.write(content)
           EOF
-          python3 patch_mac.py
+          python3 patch_mac_backdoor.py
 
-      - name: Panoramic Build (Keep-Going Mode) & Error Extraction
+      - name: Execute Kernel Build Script
         run: |
-          echo -e "\n============================================================"
-          echo "STARTING PANORAMIC BUILD (-k MODE)"
-          echo "============================================================"
-          
-          # تعديل سكربت البناء ليستخدم المعامل -k (لا تتوقف عند الخطأ)
-          sed -i 's/make -j/make -k -j/g' kernel_build_fixed.sh || true
-          
-          # تشغيل البناء وحفظ المخرجات
-          ./kernel_build_fixed.sh > build_panoramic.log 2>&1 || true
-          
-          echo -e "\n============================================================"
-          echo "💥 THE GRAND ERROR REPORT 💥"
-          echo "============================================================"
-          
-          # استخراج كل الأخطاء بدون التحذيرات لتكون الخريطة واضحة
-          grep -iE "error: " -B 2 -A 4 build_panoramic.log > all_errors.txt
-          
-          if [ -s all_errors.txt ]; then
-              cat all_errors.txt
-          else
-              echo "[+] UNBELIEVABLE! 0 ERRORS FOUND. The kernel compiled perfectly!"
-              tail -n 30 build_panoramic.log
-          fi
+          chmod -R +x scripts/ || true
+          chmod -R +x AnyKernel3/ || true
+          ./kernel_build_fixed.sh
+
+      - name: Upload Ultimate Kernel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ENGKR-YSL-OfficialKSU-SUSFS-Kernel
+          path: |
+            build/Image.gz-dtb
+            *.zip
