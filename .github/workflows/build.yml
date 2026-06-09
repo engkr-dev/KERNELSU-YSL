@@ -1,4 +1,4 @@
-name: Build ENGKR KSU v3.1.0 + SUSFS (The Ironclad Pipeline - V3)
+name: Build ENGKR KSU v3.1.0 + SUSFS (The Manual Injection)
 
 on:
   workflow_dispatch:
@@ -41,7 +41,7 @@ jobs:
           echo "[*] Injecting custom ENGKR kernel name..."
           sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-ENGKR-KSU310-SUSFS"/g' arch/arm64/configs/ysl-perf_defconfig
 
-      - name: 3. Fetching KSU & SUSFS (The Lockpicker Algorithm)
+      - name: 3. Fetching KSU & Kernel SUSFS Patch
         run: |
           echo "[*] 1. Fetching Official KernelSU v3.1.0..."
           rm -rf drivers/kernelsu fs/kernelsu /tmp/ksu_official /tmp/susfs4ksu
@@ -54,40 +54,31 @@ jobs:
           cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           patch -p1 < $(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1)
-          
-          echo "[*] 4. Applying KSU Patch (Smart Brute-Force)..."
+
+      - name: 4. The Manual SUSFS Injection (Brute-Force Wiring)
+        run: |
+          echo "[*] Wiring SUSFS manually into KSU v3.1.0..."
           cd /tmp/ksu_official
-          PATCH_APPLIED=0
           
-          # خوارزمية صانع المفاتيح: تجربة كل الباتشات المتاحة حتى نجد المتوافق
-          for p in $(find /tmp/susfs4ksu -type f -name "*.patch" | grep -i "ksu" | grep -i "susfs"); do
-              echo "[*] Testing Patch Key: $(basename $p)"
-              if patch -p1 --dry-run --silent < "$p" > /dev/null 2>&1; then
-                  echo "[+] PERFECT MATCH UNLOCKED! Applying: $(basename $p)"
-                  patch -p1 < "$p"
-                  PATCH_APPLIED=1
-                  break
-              else
-                  echo "[-] Key rejected. Trying next..."
-              fi
-          done
+          # حقن ملفات الهيدر (Header Injection) في ksu.c
+          sed -i '1i #ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif\n' kernel/ksu.c
           
-          if [ $PATCH_APPLIED -eq 0 ]; then
-              echo "[-] FATAL: No SUSFS patch matched your KSU architecture!"
-              exit 1
-          fi
+          # حقن دالة تفعيل التخفي (susfs_sus_path) عند تحميل النواة
+          sed -i '/pr_info("KernelSU/a\ \n#ifdef CONFIG_KSU_SUSFS\n\tsusfs_sus_path();\n#endif\n' kernel/ksu.c
+          
+          echo "[+] Manual Code Injection Successful!"
           cd $GITHUB_WORKSPACE
           
-          echo "[*] 5. Moving the perfectly patched KSU into VFS System (fs/kernelsu)..."
+          echo "[*] Moving the patched KSU into VFS System (fs/kernelsu)..."
           cp -r /tmp/ksu_official/kernel fs/kernelsu
           echo "obj-\$(CONFIG_KSU) += kernelsu/" >> fs/Makefile
           
-          echo "[*] 6. Forcing Version Hardcode to 32302..."
+          echo "[*] Forcing Version Hardcode to 32302..."
           sed -i 's/ccflags-y += -DKSU_VERSION.*//g' fs/kernelsu/Kbuild
           sed -i 's/-DKSU_VERSION=[^ ]*//g' fs/kernelsu/Kbuild
           echo "ccflags-y += -DKSU_VERSION=32302" >> fs/kernelsu/Kbuild
 
-      - name: 4. KSU Constants Polyfill
+      - name: 5. KSU Constants Polyfill
         run: |
           chmod +x kernel_build_fixed.sh || true
           sed -i '/menuconfig/d' kernel_build_fixed.sh || true
@@ -109,7 +100,7 @@ jobs:
           EOF
           python3 patch_ksu.py
 
-      - name: 5. Hardware Backdoor Injection
+      - name: 6. Hardware Backdoor Injection
         run: |
           cat << 'EOF' > patch_mac_backdoor.py
           import os, re
@@ -139,7 +130,7 @@ jobs:
           EOF
           python3 patch_mac_backdoor.py
 
-      - name: 6. 🚦 THE PRE-FLIGHT CHECK GATE 🚦
+      - name: 7. 🚦 THE PRE-FLIGHT CHECK GATE 🚦
         run: |
           echo -e "\n============================================================"
           echo "🚦 INITIATING STRICT PRE-FLIGHT VALIDATION 🚦"
@@ -147,6 +138,7 @@ jobs:
           if [ ! -d "fs/kernelsu" ]; then echo "[-] FATAL: fs/kernelsu directory missing!"; exit 1; fi
           if ! grep -q "kernelsu" fs/Makefile; then echo "[-] FATAL: KSU not hooked in fs/Makefile!"; exit 1; fi
           if ! grep -q "32302" fs/kernelsu/Kbuild; then echo "[-] FATAL: Version 32302 not hardcoded in Kbuild!"; exit 1; fi
+          if ! grep -q "susfs_sus_path" fs/kernelsu/ksu.c; then echo "[-] FATAL: Manual SUSFS hook failed!"; exit 1; fi
           if [ ! -f "fs/susfs.c" ] || [ ! -f "include/linux/susfs.h" ]; then echo "[-] FATAL: SUSFS core files missing!"; exit 1; fi
           if ! grep -q "engkr_mac_store" drivers/soc/qcom/wcnss/wcnss_wlan.c; then echo "[-] FATAL: MAC Backdoor missing!"; exit 1; fi
           
@@ -160,13 +152,13 @@ jobs:
           echo "🟢 ALL SYSTEMS GO! PROCEEDING TO COMPILATION 🟢"
           echo "============================================================"
 
-      - name: 7. Execute Production Build
+      - name: 8. Execute Production Build
         run: |
           chmod -R +x scripts/ || true
           chmod -R +x AnyKernel3/ || true
           ./kernel_build_fixed.sh
 
-      - name: 8. 🛡️ The Post-Build ABI Validation
+      - name: 9. 🛡️ The Post-Build ABI Validation
         run: |
           echo -e "\n============================================================"
           echo "🛡️ BINARY FORENSICS VERIFICATION 🛡️"
@@ -179,7 +171,7 @@ jobs:
           
           echo "[+] ALL CHECKS PASSED: THE KERNEL IS FLAWLESS!"
 
-      - name: 9. Upload Ultimate Kernel Artifact
+      - name: 10. Upload Ultimate Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ENGKR-YSL-KSU-32302-SUSFS
