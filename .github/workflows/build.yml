@@ -1,4 +1,4 @@
-name: ENGKR Source Recon V5 (The Sniper Scope)
+name: ENGKR Source Recon V6 (The Exact C Parser)
 
 on:
   workflow_dispatch:
@@ -11,47 +11,60 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: ENGKR Python Recon Script V5
+      - name: ENGKR Python Recon Script V6
         run: |
-          cat << 'EOF' > engkr_recon_v5.py
-          import os
+          cat << 'EOF' > engkr_recon_v6.py
+          import os, re
 
           def print_header(title):
               print(f"\n{'='*60}\n{title}\n{'='*60}")
 
-          def extract_func_body(filepath, signature, lines_count=40):
+          def get_exact_func(filepath, func_name):
               if not os.path.exists(filepath):
                   return f"[-] File not found: {filepath}"
-              try:
-                  with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                      lines = f.readlines()
-                  
-                  for i, line in enumerate(lines):
-                      if signature in line and not line.strip().startswith(('//', '/*')):
-                          body = "".join(lines[i:min(i + lines_count, len(lines))])
-                          return f"[+] Extracted from {filepath}:\n{'-'*50}\n{body}{'-'*50}"
-                  return f"[-] Signature '{signature}' not found in {filepath}."
-              except Exception as e:
-                  return f"[-] Error: {e}"
+              with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                  content = f.read()
+              
+              # نبحث عن تعريف الدالة الفعلي وليس التصريح (extern)
+              # يجب أن تكون الدالة متبوعة بـ {
+              pattern = r'(?:static\s+|void\s+|int\s+)[^\n;]*\b' + re.escape(func_name) + r'\b\s*\([^{;]*\{'
+              match = re.search(pattern, content)
+              if not match:
+                  return f"[-] Function {func_name} not found or couldn't parse in {filepath}."
+              
+              start_idx = match.start()
+              
+              # حساب الأقواس لاستخراج الدالة بالكامل
+              open_braces = 0
+              idx = match.end() - 1 
+              
+              for i in range(idx, len(content)):
+                  if content[i] == '{':
+                      open_braces += 1
+                  elif content[i] == '}':
+                      open_braces -= 1
+                      if open_braces == 0:
+                          # استخراج أول 10 أسطر من الدالة فقط لمعرفة الهيكل
+                          func_body = content[start_idx:i+1]
+                          lines = func_body.split('\n')
+                          return '\n'.join(lines[:12]) + '\n... [TRUNCATED]'
+                          
+              return "[-] Bracket parsing failed."
 
-          print_header("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 5 (FINAL)")
+          print_header("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 6 (THE EXACT PARSER)")
 
-          # 1. DIRECTORY READING (Target: filldir64)
-          print("\n[1] DIRECTORY READING BODY (fs/readdir.c)")
-          print(extract_func_body('fs/readdir.c', 'static int filldir64(', 30))
+          print("\n[1] EXACT show_map_vma() SIGNATURE (fs/proc/task_mmu.c)")
+          print("-" * 50)
+          print(get_exact_func('fs/proc/task_mmu.c', 'show_map_vma'))
 
-          # 2. MEMORY MAPS EXPOSURE (Target: show_map_vma)
-          print("\n[2] MEMORY MAPS BODY (fs/proc/task_mmu.c)")
-          print(extract_func_body('fs/proc/task_mmu.c', 'show_map_vma(struct', 40))
+          print("\n[2] EXACT show_mountinfo() SIGNATURE (fs/proc_namespace.c)")
+          print("-" * 50)
+          print(get_exact_func('fs/proc_namespace.c', 'show_mountinfo'))
 
-          # 3. MOUNTS EXPOSURE (Target: show_mountinfo)
-          print("\n[3] MOUNTS BODY (fs/proc_namespace.c)")
-          print(extract_func_body('fs/proc_namespace.c', 'static int show_mountinfo(', 40))
+          print("\n[3] EXACT filldir64() SIGNATURE (fs/readdir.c)")
+          print("-" * 50)
+          print(get_exact_func('fs/readdir.c', 'filldir64'))
 
-          # 4. TRACING TASK NAME EXTRACTION
-          print("\n[4] TASK COMM (How to get process name securely)")
-          print(extract_func_body('include/linux/sched.h', 'static inline void get_task_comm(', 15))
-
-          print_header("STAGE 5 COMPLETE - READY FOR INJECTION")
+          print_header("STAGE 6 COMPLETE")
           EOF
-          python3 engkr_recon_v5.py
+          python3 engkr_recon_v6.py
