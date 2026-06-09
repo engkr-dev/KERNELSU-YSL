@@ -1,4 +1,4 @@
-name: ENGKR Source Recon V4 (Kconfig Tree & Dynamic Sabotage)
+name: ENGKR Source Recon V5 (The Sniper Scope)
 
 on:
   workflow_dispatch:
@@ -11,81 +11,47 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: ENGKR Python Recon Script V4
+      - name: ENGKR Python Recon Script V5
         run: |
-          cat << 'EOF' > engkr_recon_v4.py
-          import os, glob
+          cat << 'EOF' > engkr_recon_v5.py
+          import os
 
           def print_header(title):
               print(f"\n{'='*60}\n{title}\n{'='*60}")
 
-          print_header("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 4")
+          def extract_func_body(filepath, signature, lines_count=40):
+              if not os.path.exists(filepath):
+                  return f"[-] File not found: {filepath}"
+              try:
+                  with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                      lines = f.readlines()
+                  
+                  for i, line in enumerate(lines):
+                      if signature in line and not line.strip().startswith(('//', '/*')):
+                          body = "".join(lines[i:min(i + lines_count, len(lines))])
+                          return f"[+] Extracted from {filepath}:\n{'-'*50}\n{body}{'-'*50}"
+                  return f"[-] Signature '{signature}' not found in {filepath}."
+              except Exception as e:
+                  return f"[-] Error: {e}"
 
-          # 1. TRACING THE KCONFIG TREE
-          print("\n[1] TRACING THE KCONFIG TREE (Where is KSU sourced?)")
-          print("-" * 50)
-          kconfig_leak = False
-          for root, _, files in os.walk('.'):
-              for file in files:
-                  if file == 'Kconfig' or file == 'Makefile':
-                      path = os.path.join(root, file)
-                      try:
-                          with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                              for i, line in enumerate(f):
-                                  if 'drivers/kernelsu' in line:
-                                      print(f"[+] Found KSU reference in {path} (Line {i+1}): {line.strip()}")
-                                      kconfig_leak = True
-                      except Exception:
-                          pass
-          if not kconfig_leak:
-              print("[-] CRITICAL: drivers/kernelsu is NOT sourced anywhere in the Kconfig/Makefile tree!")
+          print_header("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 5 (FINAL)")
 
-          # 2. DYNAMIC SABOTAGE IN BUILD SCRIPT
-          print("\n[2] DYNAMIC SABOTAGE IN BUILD SCRIPT (kernel_build_fixed.sh)")
-          print("-" * 50)
-          try:
-              with open('kernel_build_fixed.sh', 'r') as f:
-                  lines = f.readlines()
-              for i, line in enumerate(lines):
-                  # نبحث عن أوامر التعديل الديناميكي أو التحميل من الإنترنت
-                  if any(k in line for k in ['wget', 'curl', 'git clone', 'echo "CONFIG_', 'sed -i']):
-                      print(f"Line {i+1}: {line.strip()}")
-          except Exception as e:
-              print(f"[-] Error reading build script: {e}")
+          # 1. DIRECTORY READING (Target: filldir64)
+          print("\n[1] DIRECTORY READING BODY (fs/readdir.c)")
+          print(extract_func_body('fs/readdir.c', 'static int filldir64(', 30))
 
-          # 3. VERIFYING SUSFS INTEGRITY (Is it an empty shell?)
-          print("\n[3] SUSFS INTEGRITY CHECK (fs/susfs.c)")
-          print("-" * 50)
-          if os.path.exists('fs/susfs.c'):
-              size = os.path.getsize('fs/susfs.c')
-              print(f"[+] fs/susfs.c found. Size: {size} bytes")
-              if size > 5000:
-                  print("    -> Looks like a complete file, not a stub.")
-              else:
-                  print("    -> WARNING: File is too small! Might be a broken stub.")
-              
-              # التأكد من وجود دوال الإخفاء الأساسية في الملف
-              with open('fs/susfs.c', 'r', encoding='utf-8', errors='ignore') as f:
-                  content = f.read()
-                  if 'susfs_sus_ino_for_filldir64' in content or 'susfs_is_sus_path' in content:
-                      print("    -> Core hiding functions found inside susfs.c")
-                  else:
-                      print("    -> ERROR: Core hiding functions MISSING from susfs.c")
-          else:
-              print("[-] fs/susfs.c is completely missing!")
+          # 2. MEMORY MAPS EXPOSURE (Target: show_map_vma)
+          print("\n[2] MEMORY MAPS BODY (fs/proc/task_mmu.c)")
+          print(extract_func_body('fs/proc/task_mmu.c', 'show_map_vma(struct', 40))
 
-          # 4. KSU DRIVER VERSION VERIFICATION
-          print("\n[4] KERNELSU DRIVER INTEGRITY")
-          print("-" * 50)
-          ksu_makefile = 'drivers/kernelsu/Makefile'
-          if os.path.exists(ksu_makefile):
-              with open(ksu_makefile, 'r', encoding='utf-8', errors='ignore') as f:
-                  for line in f:
-                      if 'ccflags-y +=' in line or 'VERSION' in line:
-                          print(line.strip())
-          else:
-              print("[-] drivers/kernelsu/Makefile not found!")
+          # 3. MOUNTS EXPOSURE (Target: show_mountinfo)
+          print("\n[3] MOUNTS BODY (fs/proc_namespace.c)")
+          print(extract_func_body('fs/proc_namespace.c', 'static int show_mountinfo(', 40))
 
-          print_header("STAGE 4 COMPLETE")
+          # 4. TRACING TASK NAME EXTRACTION
+          print("\n[4] TASK COMM (How to get process name securely)")
+          print(extract_func_body('include/linux/sched.h', 'static inline void get_task_comm(', 15))
+
+          print_header("STAGE 5 COMPLETE - READY FOR INJECTION")
           EOF
-          python3 engkr_recon_v4.py
+          python3 engkr_recon_v5.py
