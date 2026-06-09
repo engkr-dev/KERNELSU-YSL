@@ -1,4 +1,4 @@
-name: ENGKR Source Recon V11 (The Ultimate Simulation)
+name: ENGKR Source Recon V11.1 (Precision Purge)
 
 on:
   workflow_dispatch:
@@ -11,22 +11,18 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: ENGKR Global Purge & Patch Simulator
+      - name: ENGKR Precision Purge & Patch Simulator
         run: |
-          cat << 'EOF' > simulate_build.py
+          cat << 'EOF' > simulate_build_v2.py
           import os
 
           print("\n============================================================")
-          print("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 11 (SIMULATION)")
+          print("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 11.1 (PRECISION)")
           print("============================================================")
-
-          print("\n[1] GLOBAL KSU/SUSFS INFECTION SCAN & PURGE")
-          print("-" * 50)
           
           target_dirs = ['fs', 'include', 'kernel', 'mm', 'block', 'security']
           infected_files = []
 
-          # مسح كامل وشامل لكل النواة
           for d in target_dirs:
               for root, dirs, files in os.walk(d):
                   for file in files:
@@ -34,17 +30,14 @@ jobs:
                           path = os.path.join(root, file)
                           try:
                               with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                                  content = f.read()
-                              
-                              if 'CONFIG_KSU' in content:
-                                  infected_files.append(path)
-                          except Exception:
+                                  if 'CONFIG_KSU_SUSFS' in f.read():
+                                      infected_files.append(path)
+                          except:
                               pass
           
-          print(f"[+] Found {len(infected_files)} infected files across the entire kernel.")
-          print("[*] Initiating The Great Purge...")
+          print(f"[+] Found {len(infected_files)} files infected with broken SUSFS.")
+          print("[*] Initiating The Precision Purge (Leaving base KSU intact)...")
 
-          # التطهير الجراحي الذكي
           for path in infected_files:
               with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                   lines = f.readlines()
@@ -63,7 +56,8 @@ jobs:
                           skip_depth += 1
                       continue
                   
-                  if clean_line.startswith('#ifdef CONFIG_KSU') or clean_line.startswith('#if defined(CONFIG_KSU'):
+                  # البتر يستهدف SUSFS فقط، ويترك KSU الأصلي ليعمل كمرساة للباتش
+                  if clean_line.startswith('#ifdef CONFIG_KSU_SUSFS') or clean_line.startswith('#if defined(CONFIG_KSU_SUSFS') or clean_line.startswith('#ifndef CONFIG_KSU_SUSFS'):
                       skip_depth = 1
                       purged_blocks += 1
                       continue
@@ -72,12 +66,12 @@ jobs:
               
               with open(path, 'w', encoding='utf-8') as f:
                   f.writelines(out_lines)
-              print(f"    -> Purged {purged_blocks} hooks from {path}")
+              print(f"    -> Purged {purged_blocks} broken SUSFS hooks from {path}")
 
           EOF
-          python3 simulate_build.py
+          python3 simulate_build_v2.py
 
-          echo -e "\n[2] FETCHING OFFICIAL SUSFS & CLEANING LEFTOVERS"
+          echo -e "\n[2] FETCHING OFFICIAL SUSFS"
           echo "--------------------------------------------------"
           rm -fv fs/susfs.c include/linux/susfs.h
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu 2>/dev/null
@@ -85,20 +79,15 @@ jobs:
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
 
           PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1)
-          if [ -z "$PATCH_FILE" ]; then
-              PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.14.patch" | head -n 1)
-          fi
 
           echo -e "\n[3] APPLYING OFFICIAL PATCH POST-PURGE"
           echo "--------------------------------------------------"
-          echo "[*] Testing Patch: $(basename $PATCH_FILE)"
           patch -p1 < "$PATCH_FILE" > /tmp/patch_run.txt 2>&1 || true
           
           REJECTS=$(find . -name "*.rej")
           if [ -z "$REJECTS" ]; then
               echo -e "\n[+] 🟢 INCREDIBLE SUCCESS! 0 REJECTS."
-              echo "[+] The Purge + Patch strategy works flawlessly!"
-              echo "[+] We are 100% clear for the Final Build!"
+              echo "[+] Precision Purge works perfectly. KSU Anchors found!"
           else
               echo -e "\n[-] 🔴 WARNING: SOME REJECTS STILL EXIST!"
               for rej in $REJECTS; do
@@ -106,17 +95,7 @@ jobs:
                   cat "$rej"
               done
           fi
-
-          echo -e "\n[4] VALIDATING KCONFIG INJECTION (defconfig)"
-          echo "--------------------------------------------------"
-          echo "CONFIG_KSU=y" >> arch/arm64/configs/ysl-perf_defconfig
-          echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/ysl-perf_defconfig
-          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> arch/arm64/configs/ysl-perf_defconfig
-          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> arch/arm64/configs/ysl-perf_defconfig
-          echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> arch/arm64/configs/ysl-perf_defconfig
-          echo "[*] Successfully appended keys to ysl-perf_defconfig."
-          tail -n 6 arch/arm64/configs/ysl-perf_defconfig
-
+          
           echo -e "\n============================================================"
-          echo "STAGE 11 COMPLETE"
+          echo "STAGE 11.1 COMPLETE"
           echo "============================================================"
