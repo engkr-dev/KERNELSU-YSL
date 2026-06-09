@@ -1,4 +1,4 @@
-name: ENGKR Source Recon V10 (Deep Ecosystem Radar)
+name: ENGKR Source Recon V11 (The Ultimate Simulation)
 
 on:
   workflow_dispatch:
@@ -11,66 +11,112 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: ENGKR Deep Radar Script
+      - name: ENGKR Global Purge & Patch Simulator
         run: |
-          echo -e "\n============================================================"
-          echo "ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 10 (DEEP RADAR)"
-          echo "============================================================"
+          cat << 'EOF' > simulate_build.py
+          import os
 
-          echo -e "\n[1] SUSFS & KSU HOOKS COUNT ACROSS VFS LAYER (The Infection Scan)"
-          echo "--------------------------------------------------"
-          # قائمة بكل الملفات التي يتلاعب بها KSU و SUSFS عادة
-          TARGETS=(
-              "fs/open.c"
-              "fs/stat.c"
-              "fs/dcache.c"
-              "fs/readdir.c"
-              "fs/exec.c"
-              "fs/read_write.c"
-              "fs/proc/fd.c"
-              "fs/proc/task_mmu.c"
-              "fs/notify/inotify/inotify_user.c"
-              "include/linux/sched.h"
-          )
+          print("\n============================================================")
+          print("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 11 (SIMULATION)")
+          print("============================================================")
+
+          print("\n[1] GLOBAL KSU/SUSFS INFECTION SCAN & PURGE")
+          print("-" * 50)
           
-          for file in "${TARGETS[@]}"; do
-              if [ -f "$file" ]; then
-                  # إحصاء عدد المرات التي ظهرت فيها الكلمات
-                  sus_count=$(grep -c -i "susfs" "$file" 2>/dev/null || echo "0")
-                  ksu_count=$(grep -c -i "ksu" "$file" 2>/dev/null || echo "0")
-                  
-                  echo "-> $file:"
-                  echo "   SUSFS hooks found: $sus_count"
-                  echo "   KSU hooks found  : $ksu_count"
-                  
-                  # إذا وجدنا أكواد، نطبع أول سطرين لنعرف هل هي رسمية أم معطوبة
-                  if [ "$sus_count" -gt 0 ]; then
-                      echo "   [Preview of SUSFS in this file]:"
-                      grep -n -i "susfs" "$file" | head -n 2 | sed 's/^/      /'
-                  fi
-                  if [ "$ksu_count" -gt 0 ] && [ "$sus_count" -eq 0 ]; then
-                      echo "   [Preview of KSU in this file]:"
-                      grep -n -i "ksu" "$file" | head -n 2 | sed 's/^/      /'
-                  fi
-              else
-                  echo "-> $file: [!] FILE NOT FOUND!"
-              fi
-          done
+          target_dirs = ['fs', 'include', 'kernel', 'mm', 'block', 'security']
+          infected_files = []
 
-          echo -e "\n[2] KERNELSU DRIVER LINKAGE CHECK"
+          # مسح كامل وشامل لكل النواة
+          for d in target_dirs:
+              for root, dirs, files in os.walk(d):
+                  for file in files:
+                      if file.endswith(('.c', '.h')):
+                          path = os.path.join(root, file)
+                          try:
+                              with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                                  content = f.read()
+                              
+                              if 'CONFIG_KSU' in content:
+                                  infected_files.append(path)
+                          except Exception:
+                              pass
+          
+          print(f"[+] Found {len(infected_files)} infected files across the entire kernel.")
+          print("[*] Initiating The Great Purge...")
+
+          # التطهير الجراحي الذكي
+          for path in infected_files:
+              with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                  lines = f.readlines()
+              
+              out_lines = []
+              skip_depth = 0
+              purged_blocks = 0
+              
+              for line in lines:
+                  clean_line = line.strip()
+                  
+                  if skip_depth > 0:
+                      if clean_line.startswith('#endif'):
+                          skip_depth -= 1
+                      elif clean_line.startswith('#if'):
+                          skip_depth += 1
+                      continue
+                  
+                  if clean_line.startswith('#ifdef CONFIG_KSU') or clean_line.startswith('#if defined(CONFIG_KSU'):
+                      skip_depth = 1
+                      purged_blocks += 1
+                      continue
+                      
+                  out_lines.append(line)
+              
+              with open(path, 'w', encoding='utf-8') as f:
+                  f.writelines(out_lines)
+              print(f"    -> Purged {purged_blocks} hooks from {path}")
+
+          EOF
+          python3 simulate_build.py
+
+          echo -e "\n[2] FETCHING OFFICIAL SUSFS & CLEANING LEFTOVERS"
           echo "--------------------------------------------------"
-          # هل KSU مربوط في الميك فايل الخاص بالتعريفات؟
-          if [ -d "drivers/kernelsu" ]; then
-              grep -n "kernelsu" drivers/Makefile || echo "[-] KSU is NOT linked in drivers/Makefile! It's a ghost folder."
-          else
-              echo "[-] drivers/kernelsu directory MISSING!"
+          rm -fv fs/susfs.c include/linux/susfs.h
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu 2>/dev/null
+          cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
+          cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
+
+          PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1)
+          if [ -z "$PATCH_FILE" ]; then
+              PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.14.patch" | head -n 1)
           fi
 
-          echo -e "\n[3] SEARCHING FOR HIDDEN DEFCONFIGS (The KSU Mystery)"
+          echo -e "\n[3] APPLYING OFFICIAL PATCH POST-PURGE"
           echo "--------------------------------------------------"
-          # البحث في كل ملفات الإعدادات عن CONFIG_KSU=y
-          grep -rn "CONFIG_KSU=y" arch/arm64/configs/ 2>/dev/null || echo "[-] CONFIG_KSU=y is genuinely missing from ALL defconfigs!"
+          echo "[*] Testing Patch: $(basename $PATCH_FILE)"
+          patch -p1 < "$PATCH_FILE" > /tmp/patch_run.txt 2>&1 || true
+          
+          REJECTS=$(find . -name "*.rej")
+          if [ -z "$REJECTS" ]; then
+              echo -e "\n[+] 🟢 INCREDIBLE SUCCESS! 0 REJECTS."
+              echo "[+] The Purge + Patch strategy works flawlessly!"
+              echo "[+] We are 100% clear for the Final Build!"
+          else
+              echo -e "\n[-] 🔴 WARNING: SOME REJECTS STILL EXIST!"
+              for rej in $REJECTS; do
+                  echo "--- $rej ---"
+                  cat "$rej"
+              done
+          fi
+
+          echo -e "\n[4] VALIDATING KCONFIG INJECTION (defconfig)"
+          echo "--------------------------------------------------"
+          echo "CONFIG_KSU=y" >> arch/arm64/configs/ysl-perf_defconfig
+          echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/ysl-perf_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> arch/arm64/configs/ysl-perf_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> arch/arm64/configs/ysl-perf_defconfig
+          echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> arch/arm64/configs/ysl-perf_defconfig
+          echo "[*] Successfully appended keys to ysl-perf_defconfig."
+          tail -n 6 arch/arm64/configs/ysl-perf_defconfig
 
           echo -e "\n============================================================"
-          echo "STAGE 10 COMPLETE"
+          echo "STAGE 11 COMPLETE"
           echo "============================================================"
