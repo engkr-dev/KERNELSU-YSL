@@ -1,4 +1,4 @@
-name: ENGKR Source Recon V1 (VFS & SUSFS Blueprint)
+name: ENGKR Source Recon V2 (ProcFS & Memory Maps)
 
 on:
   workflow_dispatch:
@@ -11,101 +11,117 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: ENGKR Python Recon Script
+      - name: ENGKR Python Recon Script V2
         run: |
-          cat << 'EOF' > engkr_recon.py
-          import os, re, sys
+          cat << 'EOF' > engkr_recon_v2.py
+          import os
 
           def print_header(title):
               print(f"\n{'='*60}\n{title}\n{'='*60}")
 
-          def get_file_content(filepath, lines=None):
+          def search_context(filepath, keyword, lines_before=2, lines_after=12):
               if not os.path.exists(filepath):
                   return f"[-] File not found: {filepath}"
-              try:
-                  with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                      if lines:
-                          return "".join([next(f) for _ in range(lines)])
-                      return f.read()
-              except Exception as e:
-                  return f"[-] Error reading {filepath}: {e}"
-
-          def find_function_signature(filepath, func_name):
-              if not os.path.exists(filepath):
-                  return f"[-] {filepath} not found."
-              try:
-                  with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                      lines = f.readlines()
-                  
-                  for i, line in enumerate(lines):
-                      if func_name in line and not line.strip().startswith(('//', '/*')):
-                          # return the line and the next two lines for context
-                          context = "".join(lines[i:i+3]).strip()
-                          # basic filter to avoid calling sites, looking for declarations
-                          if '{' in context or ';' in context:
-                              return f"[+] Found in {filepath}:\n    {context}"
-                  return f"[-] Function {func_name} declaration not found in {filepath}."
-              except Exception as e:
-                  return f"[-] Error parsing {filepath}: {e}"
-
-          print_header("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 1")
-
-          # 1. KERNEL VERSION CHECK
-          print("\n[1] EXACT KERNEL VERSION (Makefile)")
-          print("-" * 50)
-          print(get_file_content("Makefile", 5).strip())
-
-          # 2. KSU INTEGRATION CHECK
-          print("\n[2] KERNELSU PRESENCE & PATH")
-          print("-" * 50)
-          ksu_paths = ['KernelSU', 'drivers/kernelsu', 'fs/ksu']
-          found_ksu = False
-          for path in ksu_paths:
-              if os.path.isdir(path):
-                  print(f"[+] KSU directory found at: {path}")
-                  found_ksu = True
-          if not found_ksu:
-              print("[-] No standard KSU directory found. (Might be fully integrated into fs/)")
-
-          # 3. SUSFS LEFTOVERS CHECK
-          print("\n[3] SUSFS LEFTOVERS (Did the dev leave anything?)")
-          print("-" * 50)
-          susfs_files = ['fs/susfs.c', 'include/linux/susfs.h']
-          for sf in susfs_files:
-              if os.path.exists(sf):
-                  print(f"[+] Found leftover: {sf}")
-              else:
-                  print(f"[-] Clean: {sf} not found.")
-
-          # 4. VFS LAYER ARCHITECTURE (THE CRITICAL BACKPORT TARGETS)
-          print("\n[4] VFS LAYER SIGNATURES (readdir & filldir_t vs dir_context)")
-          print("-" * 50)
-          print(find_function_signature('fs/readdir.c', 'int iterate_dir'))
-          print(find_function_signature('fs/readdir.c', 'int vfs_readdir'))
-          print(find_function_signature('include/linux/fs.h', 'typedef int (*filldir_t)'))
-          print(find_function_signature('include/linux/fs.h', 'struct dir_context'))
-
-          # 5. STAT & OPEN LAYER ARCHITECTURE
-          print("\n[5] STAT & OPEN SIGNATURES")
-          print("-" * 50)
-          print(find_function_signature('fs/stat.c', 'int vfs_getattr'))
-          print(find_function_signature('fs/open.c', 'long do_sys_open'))
-          
-          # 6. KSU HOOKS CHECK (Are hooks currently planted in VFS?)
-          print("\n[6] KSU HOOKS IN VFS")
-          print("-" * 50)
-          vfs_read = get_file_content('fs/read_write.c')
-          if 'ksu_handle_vfs_read' in vfs_read:
-              print("[+] KSU read hooks found in fs/read_write.c")
-          else:
-              print("[-] No KSU read hooks in fs/read_write.c")
+              with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                  lines = f.readlines()
               
-          exec_code = get_file_content('fs/exec.c')
-          if 'ksu_handle_execve' in exec_code:
-              print("[+] KSU execve hooks found in fs/exec.c")
-          else:
-              print("[-] No KSU execve hooks in fs/exec.c")
+              for i, line in enumerate(lines):
+                  if keyword in line and not line.strip().startswith(('//', '/*')):
+                      start = max(0, i - lines_before)
+                      end = min(len(lines), i + lines_after)
+                      result = f"[+] Found '{keyword}' in {filepath}:\n"
+                      result += "-" * 50 + "\n"
+                      result += "".join(lines[start:end])
+                      result += "-" * 50
+                      return result
+              return f"[-] Keyword '{keyword}' not found in {filepath}."
 
-          print_header("AUTOPSY COMPLETE")
+          print_header("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 2")
+
+          # 1. MEMORY MAPS ARCHITECTURE (Where Zygisk leaks)
+          # نبحث عن دالة طباعة الذاكرة لنعترضها ونخفي libvndksupport
+          print("\n[1] MEMORY MAPS EXPOSURE (fs/proc/task_mmu.c)")
+          print(search_context('fs/proc/task_mmu.c', 'show_map_vma('))
+
+          # 2. MOUNTS ARCHITECTURE (Where OverlayFS leaks)
+          # نبحث عن دالة طباعة الـ Mounts لنخفي loop27 و meta-overlayfs
+          print("\n[2] MOUNTS EXPOSURE (fs/proc_namespace.c)")
+          print(search_context('fs/proc_namespace.c', 'show_mountinfo('))
+          print(search_context('fs/proc_namespace.c', 'show_vfsmnt('))
+
+          # 3. DIRECTORY LISTING (Where Magisk paths leak)
+          # دوال عرض محتويات المجلدات لنخفي مجلد TWRP و Magisk
+          print("\n[3] DIRECTORY LISTING ACTORS (fs/readdir.c)")
+          print(search_context('fs/readdir.c', 'static int filldir64('))
+          print(search_context('fs/readdir.c', 'static int filldir('))
+
+          # 4. PATH RESOLUTION (The String Generator)
+          print("\n[4] STRING GENERATOR (fs/seq_file.c)")
+          print(search_context('fs/seq_file.c', 'int seq_path('))
+
+          print_header("STAGE 2 COMPLETE")
           EOF
-          python3 engkr_recon.py
+          python3 engkr_recon_v2.pyname: ENGKR Source Recon V2 (ProcFS & Memory Maps)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  kernel-autopsy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: ENGKR Python Recon Script V2
+        run: |
+          cat << 'EOF' > engkr_recon_v2.py
+          import os
+
+          def print_header(title):
+              print(f"\n{'='*60}\n{title}\n{'='*60}")
+
+          def search_context(filepath, keyword, lines_before=2, lines_after=12):
+              if not os.path.exists(filepath):
+                  return f"[-] File not found: {filepath}"
+              with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                  lines = f.readlines()
+              
+              for i, line in enumerate(lines):
+                  if keyword in line and not line.strip().startswith(('//', '/*')):
+                      start = max(0, i - lines_before)
+                      end = min(len(lines), i + lines_after)
+                      result = f"[+] Found '{keyword}' in {filepath}:\n"
+                      result += "-" * 50 + "\n"
+                      result += "".join(lines[start:end])
+                      result += "-" * 50
+                      return result
+              return f"[-] Keyword '{keyword}' not found in {filepath}."
+
+          print_header("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 2")
+
+          # 1. MEMORY MAPS ARCHITECTURE (Where Zygisk leaks)
+          # نبحث عن دالة طباعة الذاكرة لنعترضها ونخفي libvndksupport
+          print("\n[1] MEMORY MAPS EXPOSURE (fs/proc/task_mmu.c)")
+          print(search_context('fs/proc/task_mmu.c', 'show_map_vma('))
+
+          # 2. MOUNTS ARCHITECTURE (Where OverlayFS leaks)
+          # نبحث عن دالة طباعة الـ Mounts لنخفي loop27 و meta-overlayfs
+          print("\n[2] MOUNTS EXPOSURE (fs/proc_namespace.c)")
+          print(search_context('fs/proc_namespace.c', 'show_mountinfo('))
+          print(search_context('fs/proc_namespace.c', 'show_vfsmnt('))
+
+          # 3. DIRECTORY LISTING (Where Magisk paths leak)
+          # دوال عرض محتويات المجلدات لنخفي مجلد TWRP و Magisk
+          print("\n[3] DIRECTORY LISTING ACTORS (fs/readdir.c)")
+          print(search_context('fs/readdir.c', 'static int filldir64('))
+          print(search_context('fs/readdir.c', 'static int filldir('))
+
+          # 4. PATH RESOLUTION (The String Generator)
+          print("\n[4] STRING GENERATOR (fs/seq_file.c)")
+          print(search_context('fs/seq_file.c', 'int seq_path('))
+
+          print_header("STAGE 2 COMPLETE")
+          EOF
+          python3 engkr_recon_v2.py
