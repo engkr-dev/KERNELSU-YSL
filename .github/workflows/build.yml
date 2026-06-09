@@ -1,4 +1,4 @@
-name: ENGKR Source Recon V2 (ProcFS & Memory Maps)
+name: ENGKR Source Recon V3 (Build Matrix & Kconfig)
 
 on:
   workflow_dispatch:
@@ -11,54 +11,66 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: ENGKR Python Recon Script V2
+      - name: ENGKR Python Recon Script V3
         run: |
-          cat << 'EOF' > engkr_recon_v2.py
-          import os
+          cat << 'EOF' > engkr_recon_v3.py
+          import os, glob
 
           def print_header(title):
               print(f"\n{'='*60}\n{title}\n{'='*60}")
 
-          def search_context(filepath, keyword, lines_before=2, lines_after=12):
+          def search_in_file(filepath, keywords):
               if not os.path.exists(filepath):
-                  return f"[-] File not found: {filepath}"
-              with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                  lines = f.readlines()
-              
-              for i, line in enumerate(lines):
-                  if keyword in line and not line.strip().startswith(('//', '/*')):
-                      start = max(0, i - lines_before)
-                      end = min(len(lines), i + lines_after)
-                      result = f"[+] Found '{keyword}' in {filepath}:\n"
-                      result += "-" * 50 + "\n"
-                      result += "".join(lines[start:end])
-                      result += "-" * 50
-                      return result
-              return f"[-] Keyword '{keyword}' not found in {filepath}."
+                  return f"[-] Not found: {filepath}"
+              try:
+                  with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                      lines = f.readlines()
+                  
+                  results = []
+                  for i, line in enumerate(lines):
+                      if any(k in line for k in keywords):
+                          results.append(f"Line {i+1}: {line.strip()}")
+                  
+                  if results:
+                      return f"[+] {filepath}:\n    " + "\n    ".join(results)
+                  else:
+                      return f"[-] No matches in {filepath}"
+              except Exception as e:
+                  return f"[-] Error: {e}"
 
-          print_header("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 2")
+          print_header("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 3")
 
-          # 1. MEMORY MAPS ARCHITECTURE (Where Zygisk leaks)
-          # نبحث عن دالة طباعة الذاكرة لنعترضها ونخفي libvndksupport
-          print("\n[1] MEMORY MAPS EXPOSURE (fs/proc/task_mmu.c)")
-          print(search_context('fs/proc/task_mmu.c', 'show_map_vma('))
+          # 1. IDENTIFY THE BUILD SCRIPT TARGET
+          print("\n[1] BUILD SCRIPT ANALYSIS (Looking for defconfig target)")
+          print("-" * 50)
+          build_scripts = glob.glob('*.sh')
+          for script in build_scripts:
+              print(f"--- Scanning {script} ---")
+              print(search_in_file(script, ['make', 'defconfig', 'YSL', 'ysl', 'BUILD']))
 
-          # 2. MOUNTS ARCHITECTURE (Where OverlayFS leaks)
-          # نبحث عن دالة طباعة الـ Mounts لنخفي loop27 و meta-overlayfs
-          print("\n[2] MOUNTS EXPOSURE (fs/proc_namespace.c)")
-          print(search_context('fs/proc_namespace.c', 'show_mountinfo('))
-          print(search_context('fs/proc_namespace.c', 'show_vfsmnt('))
+          # 2. FIND ALL YSL DEFCONFIGS
+          print("\n[2] DEVICE DEFCONFIG FILES (The Power Switches)")
+          print("-" * 50)
+          defconfigs = glob.glob('arch/arm64/configs/*ysl*') + glob.glob('arch/arm64/configs/*8953*')
+          if not defconfigs:
+              print("[-] No specific ysl or msm8953 defconfigs found in arch/arm64/configs/")
+          else:
+              for dconf in set(defconfigs):
+                  print(f"\n--- Checking {dconf} ---")
+                  print(search_in_file(dconf, ['KSU', 'SUSFS', 'OVERLAY_FS', 'PROFILING']))
 
-          # 3. DIRECTORY LISTING (Where Magisk paths leak)
-          # دوال عرض محتويات المجلدات لنخفي مجلد TWRP و Magisk
-          print("\n[3] DIRECTORY LISTING ACTORS (fs/readdir.c)")
-          print(search_context('fs/readdir.c', 'static int filldir64('))
-          print(search_context('fs/readdir.c', 'static int filldir('))
+          # 3. KCONFIG & MAKEFILE INTEGRATION (Does the build system know about SUSFS?)
+          print("\n[3] KBUILD & KCONFIG INTEGRATION (fs/ level)")
+          print("-" * 50)
+          print(search_in_file('fs/Makefile', ['ksu', 'susfs']))
+          print(search_in_file('fs/Kconfig', ['KSU', 'SUSFS']))
 
-          # 4. PATH RESOLUTION (The String Generator)
-          print("\n[4] STRING GENERATOR (fs/seq_file.c)")
-          print(search_context('fs/seq_file.c', 'int seq_path('))
+          # 4. KSU DRIVER MAKEFILE (Is KSU pulling SUSFS?)
+          print("\n[4] KERNELSU DRIVER INTEGRATION")
+          print("-" * 50)
+          print(search_in_file('drivers/kernelsu/Makefile', ['susfs', 'SUSFS']))
+          print(search_in_file('drivers/kernelsu/Kconfig', ['SUSFS']))
 
-          print_header("STAGE 2 COMPLETE")
+          print_header("STAGE 3 COMPLETE")
           EOF
-          python3 engkr_recon_v2.py
+          python3 engkr_recon_v3.py
