@@ -25,13 +25,16 @@ jobs:
           apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
           ln -s /usr/bin/python2 /usr/bin/python || true
 
-      - name: The Engine Swap (KSU-Next -> Official KSU)
+      - name: The Engine Swap (Corrected Path Alignment)
         run: |
           echo "[*] Purging KSU-Next from source..."
           rm -rf drivers/kernelsu
-          echo "[*] Cloning Official KernelSU (Mainline)..."
-          git clone --depth=1 https://github.com/tiann/KernelSU.git drivers/kernelsu
-          echo "[+] Engine Swap Complete. Foundation is now standard!"
+          echo "[*] Fetching Official KernelSU (Mainline)..."
+          git clone --depth=1 https://github.com/tiann/KernelSU.git /tmp/ksu_official
+          echo "[*] Aligning folder structure..."
+          # نأخذ محتويات مجلد kernel فقط ونضعها في المكان الصحيح
+          cp -r /tmp/ksu_official/kernel drivers/kernelsu
+          echo "[+] Engine Swap Complete. Foundation is now perfectly standard!"
 
       - name: The Ultimate Python Hack (Fixing GCC & Constants)
         run: |
