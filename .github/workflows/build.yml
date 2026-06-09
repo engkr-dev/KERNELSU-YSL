@@ -1,98 +1,80 @@
-name: Build ENGKR KSU v3.1.0 + SUSFS (The Golden Builder)
+name: KERNEL RECONNAISSANCE PROBE (The X-Ray)
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-kernel:
+  recon-mission:
     runs-on: ubuntu-latest
-    container: ubuntu:20.04
 
     steps:
-      - name: Setup System & Environment
-        env:
-          DEBIAN_FRONTEND: noninteractive
-          TZ: UTC
-        run: |
-          # حل مشكلة tzdata التفاعلية بشكل جذري
-          ln -fs /usr/share/zoneinfo/UTC /etc/localtime
-          apt-get update
-          apt-get install -y tzdata
-          
-          # تثبيت الأدوات الأساسية
-          apt-get install -y git wget python3 unifdef bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
-          ln -s /usr/bin/python2 /usr/bin/python || true
-          git config --global --add safe.directory '*'
-
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: 1. Fetch Toolchains (Smart Path Detection)
+      - name: The Python X-Ray Scanner
         run: |
-          mkdir -p toolchains/gcc64 toolchains/gcc32
-          wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz -O gcc64.tar.gz
-          tar -xf gcc64.tar.gz -C toolchains/gcc64
-          wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz -O gcc32.tar.gz
-          tar -xf gcc32.tar.gz -C toolchains/gcc32
-          
-          # استكشاف المسارات المطلقة
-          GCC64_BIN=$(find $PWD/toolchains/gcc64 -name "aarch64-linux-android-gcc" | xargs dirname)
-          GCC32_BIN=$(find $PWD/toolchains/gcc32 -name "arm-linux-androideabi-gcc" | xargs dirname)
-          
-          echo "GCC64_PATH=$GCC64_BIN/aarch64-linux-android-" >> $GITHUB_ENV
-          echo "GCC32_PATH=$GCC32_BIN/arm-linux-androideabi-" >> $GITHUB_ENV
-          echo "[+] Toolchains ready at: $GCC64_BIN"
+          cat << 'EOF' > kernel_xray.py
+          import os
+          import glob
 
-      - name: 2. VFS Surgeon & Injection
-        run: |
-          # تنظيف قديم
-          sed -i '/kernelsu/d' drivers/Makefile drivers/Kconfig fs/Makefile fs/Kconfig || true
-          
-          # حقن الخطافات (VFS Hooks) برمجياً
-          cat << 'EOF' > inject_vfs.py
-          import os, re
-          def inject_after_brace(file_path, func_pattern, hook_code):
-              if not os.path.exists(file_path): return
-              with open(file_path, "r") as f: content = f.read()
-              if "ksu_handle" in content: return
-              if "#include <linux/types.h>" not in content: content = "#include <linux/types.h>\n" + content
-              match = re.search(func_pattern + r'\s*\{', content)
-              if match:
-                  content = content[:match.end()] + "\n" + hook_code + content[match.end():]
-                  with open(file_path, "w") as f: f.write(content)
+          print("\n" + "="*60)
+          print(" 🕵️‍♂️ KERNEL RECONNAISSANCE REPORT STARTED 🕵️‍♂️ ")
+          print("="*60 + "\n")
 
-          inject_after_brace("fs/open.c", r'long\s+do_sys_open\s*\([^)]*\)', "\n\textern bool ksu_vfs_open_hook __attribute__((weak));\n\textern int ksu_handle_open(int *dfd, const char __user **filename_ptr, int *flags, umode_t *mode) __attribute__((weak));\n\tif (unlikely(ksu_vfs_open_hook)) ksu_handle_open(&dfd, &filename, &flags, &mode);\n")
-          inject_after_brace("fs/exec.c", r'static\s+int\s+do_execveat_common\s*\([^)]*\)', "\n\textern bool ksu_execveat_hook __attribute__((weak));\n\textern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *ptr, int *flags) __attribute__((weak));\n\tif (unlikely(ksu_execveat_hook)) ksu_handle_execveat(&fd, &filename, &bprm, &flags);\n")
+          # 1. تحديد مكان KernelSU-Next بالضبط
+          ksu_dirs = glob.glob("**/kernelsu", recursive=True) + glob.glob("**/KernelSU-Next", recursive=True)
+          print(f"[*] 1. KernelSU Directories Found: {ksu_dirs}")
+
+          # 2. فحص ملف ksu.c للعثور على دالة الإقلاع (Init)
+          for kdir in ksu_dirs:
+              ksu_c = os.path.join(kdir, "ksu.c")
+              if os.path.exists(ksu_c):
+                  print(f"\n[*] 2. Analyzing {ksu_c} for initialization routines:")
+                  with open(ksu_c, "r", encoding="utf-8", errors="ignore") as f:
+                      lines = f.readlines()
+                      for i, line in enumerate(lines):
+                          # نبحث عن الدوال التي تبدأ بـ init أو late_initcall
+                          if "initcall" in line or "__init" in line or "susfs" in line.lower():
+                              print(f"    Line {i+1}: {line.strip()}")
+
+          # 3. فحص خطافات VFS الأساسية لمعرفة كيف تم حقنها مسبقاً
+          vfs_files = ["fs/open.c", "fs/exec.c", "fs/read_write.c", "fs/stat.c"]
+          print("\n[*] 3. Scanning VFS Core Files for existing KSU hooks:")
+          for vfs in vfs_files:
+              if os.path.exists(vfs):
+                  hook_found = False
+                  with open(vfs, "r", encoding="utf-8", errors="ignore") as f:
+                      lines = f.readlines()
+                      for i, line in enumerate(lines):
+                          if "ksu" in line.lower():
+                              if not hook_found:
+                                  print(f"\n  --> Hooks found in {vfs}:")
+                                  hook_found = True
+                              print(f"      Line {i+1}: {line.strip()}")
+                  if not hook_found:
+                      print(f"  [-] No KSU hooks found in {vfs}")
+              else:
+                  print(f"  [!] File {vfs} does not exist!")
+
+          # 4. فحص ملفات Kbuild و Makefile لمعرفة طريقة الربط
+          print("\n[*] 4. Checking Build Configs (Kbuild/Makefile) for KSU parameters:")
+          for kdir in ksu_dirs:
+              kbuild = os.path.join(kdir, "Kbuild")
+              if os.path.exists(kbuild):
+                  with open(kbuild, "r", encoding="utf-8", errors="ignore") as f:
+                      print(f"  --> Content of {kbuild}:")
+                      for line in f.readlines():
+                          if "ccflags" in line or "VERSION" in line:
+                              print(f"      {line.strip()}")
+
+          # 5. التحقق من وجود SUSFS القديم
+          print("\n[*] 5. Checking for legacy SUSFS files:")
+          print(f"  --> fs/susfs.c exists: {os.path.exists('fs/susfs.c')}")
+          print(f"  --> include/linux/susfs.h exists: {os.path.exists('include/linux/susfs.h')}")
+
+          print("\n" + "="*60)
+          print(" 🏁 RECONNAISSANCE COMPLETE 🏁 ")
+          print("="*60 + "\n")
           EOF
-          python3 inject_vfs.py
           
-          # جلب KSU و SUSFS
-          git clone -b v3.1.0 https://github.com/tiann/KernelSU.git /tmp/ksu_official
-          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
-          patch -p1 --force < $(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1) || true
-          
-          cp -r /tmp/ksu_official/kernel fs/kernelsu
-          echo "obj-\$(CONFIG_KSU) += kernelsu/" >> fs/Makefile
-          echo 'source "fs/kernelsu/Kconfig"' >> fs/Kconfig
-          sed -i '1s/^/#include <linux\/susfs.h>\n/' fs/kernelsu/ksu.c
-          echo -e "\nstatic int __init engkr_ksu_susfs_init(void) { #ifdef CONFIG_KSU_SUSFS\n\tsusfs_sus_path();\n#endif\n\treturn 0; }\nlate_initcall(engkr_ksu_susfs_init);" >> fs/kernelsu/ksu.c
-          echo "ccflags-y += -DCONFIG_KSU_SUSFS -DKSU_VERSION=32302" >> fs/kernelsu/Kbuild
-
-      - name: 3. Production Build
-        run: |
-          sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-ENGKR-KSU310-SUSFS"/g' arch/arm64/configs/ysl-perf_defconfig
-          
-          # البناء الصامت
-          make ARCH=arm64 CROSS_COMPILE=$GCC64_PATH CROSS_COMPILE_ARM32=$GCC32_PATH ysl-perf_defconfig
-          echo "CONFIG_KSU=y" >> .config
-          echo "CONFIG_KSU_SUSFS=y" >> .config
-          
-          make ARCH=arm64 CROSS_COMPILE=$GCC64_PATH CROSS_COMPILE_ARM32=$GCC32_PATH -j$(nproc)
-          
-          mkdir -p build && cp arch/arm64/boot/Image.gz-dtb build/
-
-      - name: 4. Upload Result
-        uses: actions/upload-artifact@v4
-        with:
-          name: ENGKR-YSL-KSU-FINAL-V15
-          path: build/Image.gz-dtb
+          python3 kernel_xray.py
