@@ -1,4 +1,4 @@
-name: ENGKR Source Recon V7 (Official SUSFS Dry-Run)
+name: ENGKR Source Recon V8 (Reject Analyzer)
 
 on:
   workflow_dispatch:
@@ -11,61 +11,33 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: ENGKR SUSFS Collision Test Script
+      - name: ENGKR SUSFS Reject Analyzer
         run: |
-          cat << 'EOF' > engkr_recon_v7.sh
+          cat << 'EOF' > engkr_recon_v8.sh
           #!/bin/bash
           
           echo -e "\n============================================================"
-          echo "ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 7"
+          echo "ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 8"
           echo "============================================================"
 
-          echo -e "\n[1] CLEANING UP BROKEN LEFTOVERS"
+          echo -e "\n[1] PREPARING ENVIRONMENT"
           echo "--------------------------------------------------"
-          rm -fv fs/susfs.c
-          rm -fv include/linux/susfs.h
-          
-          echo -e "\n[2] FETCHING OFFICIAL SUSFS4KSU REPOSITORY"
-          echo "--------------------------------------------------"
+          rm -fv fs/susfs.c include/linux/susfs.h
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu 2>/dev/null
-          if [ -d "/tmp/susfs4ksu" ]; then
-              echo "[+] Official repo downloaded successfully."
-          else
-              echo "[-] Failed to download official repo!"
-              exit 1
-          fi
-
-          echo -e "\n[3] INJECTING CORE 4.9 FILES"
-          echo "--------------------------------------------------"
           cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           
-          # فحص إذا كان ملف الباتش 4.9 موجوداً
           PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1)
-          
           if [ -z "$PATCH_FILE" ]; then
-              echo "[-] WARNING: Specific 4.9 patch not found in repo! Falling back to 4.14 patch for collision test."
               PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.14.patch" | head -n 1)
           fi
 
-          echo -e "\n[4] VFS LAYER COLLISION TEST (DRY-RUN)"
+          echo -e "\n[2] APPLYING PATCH (EXPECTING FAILURES)"
           echo "--------------------------------------------------"
-          echo "[*] Testing patch: $(basename $PATCH_FILE)"
+          # تطبيق الباتش فعلياً للسماح له بتوليد ملفات .rej
+          patch -p1 < "$PATCH_FILE" > /tmp/patch_run.txt 2>&1
           
-          # اختبار الدمج الجاف (لن يتم التعديل الفعلي، سيختبر التوافق فقط)
-          patch -p1 --dry-run < "$PATCH_FILE" > /tmp/patch_report.txt 2>&1
-          
-          # استخراج الأخطاء والاصطدامات فقط
-          grep -iE "FAILED|Hunk #|reversed|malformed" /tmp/patch_report.txt || echo "[+] AMAZING! Patch applies cleanly with NO conflicts!"
-          
-          echo -e "\n[5] DETAILED FAILED HUNKS (The Code that needs manual routing)"
+          echo -e "\n[3] ANALYZING REJECT FILES (.rej)"
           echo "--------------------------------------------------"
-          # قراءة الأسطر المعطوبة لنعرف كيف نكتب بايثون يحلها
-          cat /tmp/patch_report.txt | grep "FAILED at"
-
-          echo -e "\n============================================================"
-          echo "STAGE 7 COMPLETE"
-          echo "============================================================"
-          EOF
-          chmod +x engkr_recon_v7.sh
-          ./engkr_recon_v7.sh
+          # البحث عن ملفات الرفض التي نتجت عن الفشل
+          REJECT_FILES=$(find . -
