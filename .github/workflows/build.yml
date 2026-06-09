@@ -1,4 +1,4 @@
-name: ENGKR Source Recon V3 (Build Matrix & Kconfig)
+name: ENGKR Source Recon V4 (Kconfig Tree & Dynamic Sabotage)
 
 on:
   workflow_dispatch:
@@ -11,66 +11,81 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: ENGKR Python Recon Script V3
+      - name: ENGKR Python Recon Script V4
         run: |
-          cat << 'EOF' > engkr_recon_v3.py
+          cat << 'EOF' > engkr_recon_v4.py
           import os, glob
 
           def print_header(title):
               print(f"\n{'='*60}\n{title}\n{'='*60}")
 
-          def search_in_file(filepath, keywords):
-              if not os.path.exists(filepath):
-                  return f"[-] Not found: {filepath}"
-              try:
-                  with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                      lines = f.readlines()
-                  
-                  results = []
-                  for i, line in enumerate(lines):
-                      if any(k in line for k in keywords):
-                          results.append(f"Line {i+1}: {line.strip()}")
-                  
-                  if results:
-                      return f"[+] {filepath}:\n    " + "\n    ".join(results)
+          print_header("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 4")
+
+          # 1. TRACING THE KCONFIG TREE
+          print("\n[1] TRACING THE KCONFIG TREE (Where is KSU sourced?)")
+          print("-" * 50)
+          kconfig_leak = False
+          for root, _, files in os.walk('.'):
+              for file in files:
+                  if file == 'Kconfig' or file == 'Makefile':
+                      path = os.path.join(root, file)
+                      try:
+                          with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                              for i, line in enumerate(f):
+                                  if 'drivers/kernelsu' in line:
+                                      print(f"[+] Found KSU reference in {path} (Line {i+1}): {line.strip()}")
+                                      kconfig_leak = True
+                      except Exception:
+                          pass
+          if not kconfig_leak:
+              print("[-] CRITICAL: drivers/kernelsu is NOT sourced anywhere in the Kconfig/Makefile tree!")
+
+          # 2. DYNAMIC SABOTAGE IN BUILD SCRIPT
+          print("\n[2] DYNAMIC SABOTAGE IN BUILD SCRIPT (kernel_build_fixed.sh)")
+          print("-" * 50)
+          try:
+              with open('kernel_build_fixed.sh', 'r') as f:
+                  lines = f.readlines()
+              for i, line in enumerate(lines):
+                  # نبحث عن أوامر التعديل الديناميكي أو التحميل من الإنترنت
+                  if any(k in line for k in ['wget', 'curl', 'git clone', 'echo "CONFIG_', 'sed -i']):
+                      print(f"Line {i+1}: {line.strip()}")
+          except Exception as e:
+              print(f"[-] Error reading build script: {e}")
+
+          # 3. VERIFYING SUSFS INTEGRITY (Is it an empty shell?)
+          print("\n[3] SUSFS INTEGRITY CHECK (fs/susfs.c)")
+          print("-" * 50)
+          if os.path.exists('fs/susfs.c'):
+              size = os.path.getsize('fs/susfs.c')
+              print(f"[+] fs/susfs.c found. Size: {size} bytes")
+              if size > 5000:
+                  print("    -> Looks like a complete file, not a stub.")
+              else:
+                  print("    -> WARNING: File is too small! Might be a broken stub.")
+              
+              # التأكد من وجود دوال الإخفاء الأساسية في الملف
+              with open('fs/susfs.c', 'r', encoding='utf-8', errors='ignore') as f:
+                  content = f.read()
+                  if 'susfs_sus_ino_for_filldir64' in content or 'susfs_is_sus_path' in content:
+                      print("    -> Core hiding functions found inside susfs.c")
                   else:
-                      return f"[-] No matches in {filepath}"
-              except Exception as e:
-                  return f"[-] Error: {e}"
-
-          print_header("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 3")
-
-          # 1. IDENTIFY THE BUILD SCRIPT TARGET
-          print("\n[1] BUILD SCRIPT ANALYSIS (Looking for defconfig target)")
-          print("-" * 50)
-          build_scripts = glob.glob('*.sh')
-          for script in build_scripts:
-              print(f"--- Scanning {script} ---")
-              print(search_in_file(script, ['make', 'defconfig', 'YSL', 'ysl', 'BUILD']))
-
-          # 2. FIND ALL YSL DEFCONFIGS
-          print("\n[2] DEVICE DEFCONFIG FILES (The Power Switches)")
-          print("-" * 50)
-          defconfigs = glob.glob('arch/arm64/configs/*ysl*') + glob.glob('arch/arm64/configs/*8953*')
-          if not defconfigs:
-              print("[-] No specific ysl or msm8953 defconfigs found in arch/arm64/configs/")
+                      print("    -> ERROR: Core hiding functions MISSING from susfs.c")
           else:
-              for dconf in set(defconfigs):
-                  print(f"\n--- Checking {dconf} ---")
-                  print(search_in_file(dconf, ['KSU', 'SUSFS', 'OVERLAY_FS', 'PROFILING']))
+              print("[-] fs/susfs.c is completely missing!")
 
-          # 3. KCONFIG & MAKEFILE INTEGRATION (Does the build system know about SUSFS?)
-          print("\n[3] KBUILD & KCONFIG INTEGRATION (fs/ level)")
+          # 4. KSU DRIVER VERSION VERIFICATION
+          print("\n[4] KERNELSU DRIVER INTEGRITY")
           print("-" * 50)
-          print(search_in_file('fs/Makefile', ['ksu', 'susfs']))
-          print(search_in_file('fs/Kconfig', ['KSU', 'SUSFS']))
+          ksu_makefile = 'drivers/kernelsu/Makefile'
+          if os.path.exists(ksu_makefile):
+              with open(ksu_makefile, 'r', encoding='utf-8', errors='ignore') as f:
+                  for line in f:
+                      if 'ccflags-y +=' in line or 'VERSION' in line:
+                          print(line.strip())
+          else:
+              print("[-] drivers/kernelsu/Makefile not found!")
 
-          # 4. KSU DRIVER MAKEFILE (Is KSU pulling SUSFS?)
-          print("\n[4] KERNELSU DRIVER INTEGRATION")
-          print("-" * 50)
-          print(search_in_file('drivers/kernelsu/Makefile', ['susfs', 'SUSFS']))
-          print(search_in_file('drivers/kernelsu/Kconfig', ['SUSFS']))
-
-          print_header("STAGE 3 COMPLETE")
+          print_header("STAGE 4 COMPLETE")
           EOF
-          python3 engkr_recon_v3.py
+          python3 engkr_recon_v4.py
