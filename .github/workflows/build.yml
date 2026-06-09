@@ -1,4 +1,4 @@
-name: ENGKR Source Recon V6 (The Exact C Parser)
+name: ENGKR Source Recon V7 (Official SUSFS Dry-Run)
 
 on:
   workflow_dispatch:
@@ -11,60 +11,61 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: ENGKR Python Recon Script V6
+      - name: ENGKR SUSFS Collision Test Script
         run: |
-          cat << 'EOF' > engkr_recon_v6.py
-          import os, re
+          cat << 'EOF' > engkr_recon_v7.sh
+          #!/bin/bash
+          
+          echo -e "\n============================================================"
+          echo "ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 7"
+          echo "============================================================"
 
-          def print_header(title):
-              print(f"\n{'='*60}\n{title}\n{'='*60}")
+          echo -e "\n[1] CLEANING UP BROKEN LEFTOVERS"
+          echo "--------------------------------------------------"
+          rm -fv fs/susfs.c
+          rm -fv include/linux/susfs.h
+          
+          echo -e "\n[2] FETCHING OFFICIAL SUSFS4KSU REPOSITORY"
+          echo "--------------------------------------------------"
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu 2>/dev/null
+          if [ -d "/tmp/susfs4ksu" ]; then
+              echo "[+] Official repo downloaded successfully."
+          else
+              echo "[-] Failed to download official repo!"
+              exit 1
+          fi
 
-          def get_exact_func(filepath, func_name):
-              if not os.path.exists(filepath):
-                  return f"[-] File not found: {filepath}"
-              with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                  content = f.read()
-              
-              # نبحث عن تعريف الدالة الفعلي وليس التصريح (extern)
-              # يجب أن تكون الدالة متبوعة بـ {
-              pattern = r'(?:static\s+|void\s+|int\s+)[^\n;]*\b' + re.escape(func_name) + r'\b\s*\([^{;]*\{'
-              match = re.search(pattern, content)
-              if not match:
-                  return f"[-] Function {func_name} not found or couldn't parse in {filepath}."
-              
-              start_idx = match.start()
-              
-              # حساب الأقواس لاستخراج الدالة بالكامل
-              open_braces = 0
-              idx = match.end() - 1 
-              
-              for i in range(idx, len(content)):
-                  if content[i] == '{':
-                      open_braces += 1
-                  elif content[i] == '}':
-                      open_braces -= 1
-                      if open_braces == 0:
-                          # استخراج أول 10 أسطر من الدالة فقط لمعرفة الهيكل
-                          func_body = content[start_idx:i+1]
-                          lines = func_body.split('\n')
-                          return '\n'.join(lines[:12]) + '\n... [TRUNCATED]'
-                          
-              return "[-] Bracket parsing failed."
+          echo -e "\n[3] INJECTING CORE 4.9 FILES"
+          echo "--------------------------------------------------"
+          cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
+          cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
+          
+          # فحص إذا كان ملف الباتش 4.9 موجوداً
+          PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.9.patch" | head -n 1)
+          
+          if [ -z "$PATCH_FILE" ]; then
+              echo "[-] WARNING: Specific 4.9 patch not found in repo! Falling back to 4.14 patch for collision test."
+              PATCH_FILE=$(find /tmp/susfs4ksu/kernel_patches -name "*kernel-4.14.patch" | head -n 1)
+          fi
 
-          print_header("ENGKR KERNEL SOURCE AUTOPSY REPORT - STAGE 6 (THE EXACT PARSER)")
+          echo -e "\n[4] VFS LAYER COLLISION TEST (DRY-RUN)"
+          echo "--------------------------------------------------"
+          echo "[*] Testing patch: $(basename $PATCH_FILE)"
+          
+          # اختبار الدمج الجاف (لن يتم التعديل الفعلي، سيختبر التوافق فقط)
+          patch -p1 --dry-run < "$PATCH_FILE" > /tmp/patch_report.txt 2>&1
+          
+          # استخراج الأخطاء والاصطدامات فقط
+          grep -iE "FAILED|Hunk #|reversed|malformed" /tmp/patch_report.txt || echo "[+] AMAZING! Patch applies cleanly with NO conflicts!"
+          
+          echo -e "\n[5] DETAILED FAILED HUNKS (The Code that needs manual routing)"
+          echo "--------------------------------------------------"
+          # قراءة الأسطر المعطوبة لنعرف كيف نكتب بايثون يحلها
+          cat /tmp/patch_report.txt | grep "FAILED at"
 
-          print("\n[1] EXACT show_map_vma() SIGNATURE (fs/proc/task_mmu.c)")
-          print("-" * 50)
-          print(get_exact_func('fs/proc/task_mmu.c', 'show_map_vma'))
-
-          print("\n[2] EXACT show_mountinfo() SIGNATURE (fs/proc_namespace.c)")
-          print("-" * 50)
-          print(get_exact_func('fs/proc_namespace.c', 'show_mountinfo'))
-
-          print("\n[3] EXACT filldir64() SIGNATURE (fs/readdir.c)")
-          print("-" * 50)
-          print(get_exact_func('fs/readdir.c', 'filldir64'))
-
-          print_header("STAGE 6 COMPLETE")
+          echo -e "\n============================================================"
+          echo "STAGE 7 COMPLETE"
+          echo "============================================================"
           EOF
-          python3 engkr_recon_v6.py
+          chmod +x engkr_recon_v7.sh
+          ./engkr_recon_v7.sh
