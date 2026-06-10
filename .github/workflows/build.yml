@@ -1,4 +1,4 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel (Ultimate V22)
+name: Build ENGKR KSU-Next + SUSFS Kernel (Ultimate V23)
 
 on:
   workflow_dispatch:
@@ -95,8 +95,6 @@ jobs:
           attr_match = re.search(r'DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*([a-zA-Z0-9_]+)', content)
           if attr_match:
               show_func = attr_match.group(1)
-              print(f"[+] Found original show function: {show_func}")
-              
               func_match = re.search(rf'static\s+ssize_t\s+{show_func}', content)
               if func_match:
                   content = content[:func_match.start()] + backdoor_func + "\n" + content[func_match.start():]
@@ -105,18 +103,13 @@ jobs:
                   
               content = re.sub(r'(static\s+)?DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr[^;]+;', 
                                f'static DEVICE_ATTR(wcnss_mac_addr, 0664, {show_func}, engkr_mac_store);', content)
-              print("[+] SysFS Node made WRITABLE and linked to backdoor!")
-          else:
-              print("[-] Could not find wcnss_mac_addr DEVICE_ATTR!")
-              
+          
           with open(target, 'w', encoding='utf-8') as f:
               f.write(content)
-              
-          print("[+] WCNSS Direct Memory Patch Applied Successfully.")
           EOF
           python3 patch_mac_backdoor.py
 
-      - name: Inject Pure SUSFS Engine & Defensive Polyfills
+      - name: Inject Pure SUSFS Engine & Safe Polyfills
         run: |
           echo "[*] Injecting SUSFS Core Files..."
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
@@ -126,13 +119,9 @@ jobs:
           # إضافة SUSFS لنظام البناء
           grep -q "susfs.o" fs/Makefile || echo "obj-y += susfs.o" >> fs/Makefile
           
-          echo "[*] Neutralizing Werror SAFELY and Polyfilling zeromount..."
-          # الإزالة الآمنة لـ Werror (فقط الكلمة المنفردة، وليس الكلمات المركبة)
-          find . -name "Makefile" -exec sed -i 's/-Werror\b//g' {} + || true
-          find . -name "Kbuild" -exec sed -i 's/-Werror\b//g' {} + || true
-          
-          # الترقيع الجراحي للدالة المفقودة
-          sed -i 's/if (susfs_is_current_proc_umounted())/if (0 \/* polyfill: susfs_is_current_proc_umounted() *\/)/g' fs/zeromount.c || true
+          echo "[*] Polyfilling zeromount.c safely..."
+          # استبدال الدالة الناقصة بصفر (0) بشكل مباشر ليتجاوزها المترجم بسلام
+          sed -i 's/susfs_is_current_proc_umounted()/0/g' fs/zeromount.c || true
           
           echo "[*] Forcing SUSFS & Security Overrides into Defconfigs..."
           find arch/arm64/configs -name "*ysl*" -exec sh -c '
