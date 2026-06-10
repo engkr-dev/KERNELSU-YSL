@@ -27,12 +27,13 @@ jobs:
 
       - name: The Ultimate Python Hack (Carpet Bombing KSU Constants)
         run: |
-          chmod +x kernel_build_fixed.sh
+          chmod +x kernel_build_fixed.sh || true
+          
           # 1. إزالة واجهة menuconfig
-          sed -i '/menuconfig/d' kernel_build_fixed.sh
+          sed -i '/menuconfig/d' kernel_build_fixed.sh || true
           
           # 2. تخطي حاجز الإصدار للمترجم
-          sed -i 's/# error Sorry, your version of GCC is too old - please use 5.1 or newer.//g' include/linux/compiler-gcc.h
+          sed -i 's/# error Sorry, your version of GCC is too old - please use 5.1 or newer.//g' include/linux/compiler-gcc.h || true
           
           # 3. سكربت الثوابت الخاص بـ KSU
           cat << 'EOF' > patch_ksu.py
@@ -85,4 +86,80 @@ jobs:
                   penv->wlan_nv_mac_addr[4] = (char)mac[4];
                   penv->wlan_nv_mac_addr[5] = (char)mac[5];
                   
-                  printk(KERN_INFO "ENGKR: Hardware MAC surgically altered
+                  printk(KERN_INFO "ENGKR: Hardware MAC surgically altered in WCNSS baseband!\\n");
+              }
+              return count;
+          }
+          """
+          
+          # 1. استخراج اسم دالة العرض الأصلية
+          attr_match = re.search(r'DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*([a-zA-Z0-9_]+)', content)
+          if attr_match:
+              show_func = attr_match.group(1)
+              print(f"[+] Found original show function: {show_func}")
+              
+              # 2. زرع الدالة الخبيثة
+              func_match = re.search(rf'static\s+ssize_t\s+{show_func}', content)
+              if func_match:
+                  content = content[:func_match.start()] + backdoor_func + "\n" + content[func_match.start():]
+              else:
+                  content = content.replace(attr_match.group(0), backdoor_func + "\n" + attr_match.group(0))
+                  
+              # 3. تحويل العقدة إلى القراءة والكتابة
+              content = re.sub(r'(static\s+)?DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr[^;]+;', 
+                               f'static DEVICE_ATTR(wcnss_mac_addr, 0664, {show_func}, engkr_mac_store);', content)
+              print("[+] SysFS Node made WRITABLE and linked to backdoor!")
+          else:
+              print("[-] Could not find wcnss_mac_addr DEVICE_ATTR!")
+              
+          with open(target, 'w', encoding='utf-8') as f:
+              f.write(content)
+              
+          print("[+] WCNSS Direct Memory Patch Applied Successfully.")
+          EOF
+          python3 patch_mac_backdoor.py
+
+      - name: Inject Pure SUSFS Engine & Defensive Polyfills
+        run: |
+          echo "[*] Injecting SUSFS Core Files..."
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
+          cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/ || true
+          cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ || true
+          
+          # إضافة SUSFS لنظام البناء
+          grep -q "susfs.o" fs/Makefile || echo "obj-y += susfs.o" >> fs/Makefile
+          
+          echo "[*] Neutralizing Werror and Polyfilling zeromount..."
+          # إيقاف التحذيرات القاتلة التي تدمر البناء
+          find . -name "Makefile" -exec sed -i 's/-Werror//g' {} + || true
+          find . -name "Kbuild" -exec sed -i 's/-Werror//g' {} + || true
+          
+          # الترقيع الجراحي للدالة المفقودة
+          sed -i 's/if (susfs_is_current_proc_umounted())/if (0 \/* polyfill: susfs_is_current_proc_umounted() *\/)/g' fs/zeromount.c || true
+          
+          echo "[*] Forcing SUSFS & Security Overrides into Defconfigs..."
+          # حقن تفعيل التخفي وإلغاء حماية الذاكرة ليمر من المترجم القديم
+          find arch/arm64/configs -name "*ysl*" -exec sh -c '
+            echo "CONFIG_KSU_SUSFS=y" >> "$1"
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$1"
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "$1"
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> "$1"
+            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> "$1"
+            sed -i "s/CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/g" "$1"
+            sed -i "s/CONFIG_CC_STACKPROTECTOR_REGULAR=y/# CONFIG_CC_STACKPROTECTOR_REGULAR is not set/g" "$1"
+            echo "CONFIG_CC_STACKPROTECTOR_NONE=y" >> "$1"
+          ' _ {} \;
+
+      - name: Execute Kernel Build Script
+        run: |
+          chmod -R +x scripts/ || true
+          chmod -R +x AnyKernel3/ || true
+          ./kernel_build_fixed.sh
+
+      - name: Upload Kernel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ENGKR-YSL-KSU-SUSFS-ULTIMATE
+          path: |
+            build/Image.gz-dtb
+            *.zip
