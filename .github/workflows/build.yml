@@ -1,4 +1,4 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel (V31 - The Final Nuke)
+name: Build ENGKR KSU-Next + SUSFS Kernel (V32 - Absolute Victory)
 
 on:
   workflow_dispatch:
@@ -123,7 +123,8 @@ jobs:
           sed -i '1s/^/obj-y += susfs.o susfs_stubs.o\n/' fs/Makefile
 
           echo "[*] Building the Universal Global Header..."
-          cat << 'EOF' > include/linux/engkr_global.h
+          # نضعه في المسار الأساسي ليقرأه بسهولة
+          cat << 'EOF' > engkr_global.h
           #ifndef _ENGKR_GLOBAL_H
           #define _ENGKR_GLOBAL_H
           /* ENGKR CONSTANTS */
@@ -155,7 +156,7 @@ jobs:
           #define CMD_SUSFS_SHOW_VERSION 18
           #endif
           
-          /* KSU-NEXT SUSFS PROTOTYPES (Fixing implicit declarations) */
+          /* KSU-NEXT SUSFS PROTOTYPES */
           void susfs_add_sus_path_loop(void **arg);
           void susfs_set_hide_sus_mnts_for_non_su_procs(void **arg);
           void susfs_enable_log(void **arg);
@@ -169,7 +170,7 @@ jobs:
           void susfs_start_sdcard_monitor_fn(void);
           int susfs_is_current_proc_umounted(void);
           
-          /* TYPE CASTING MACROS (Fixing incompatible pointer types) */
+          /* TYPE CASTING MACROS */
           #define susfs_add_sus_path(arg) susfs_add_sus_path((void*)(arg))
           #define susfs_add_sus_kstat(arg) susfs_add_sus_kstat((void*)(arg))
           #define susfs_update_sus_kstat(arg) susfs_update_sus_kstat((void*)(arg))
@@ -212,16 +213,16 @@ jobs:
 
       - name: Execute Kernel Build Script
         env:
-          # نأمر المترجم بإدراج الملف الذي صنعناه (engkr_global.h) في كل ملفات الكيرنل قسراً
-          # بدون استخدام خيارات GCC الحديثة التي لا يفهمها GCC 4.9!
+          # المسار المطلق للـ WORKSPACE الخاص بـ GITHUB_WORKSPACE
+          # مع إضافة Wno-error=int-conversion للتحذير الذي ظهر في رسالتك السابقة
           KCFLAGS: >-
-            -include include/linux/engkr_global.h
+            -include ${GITHUB_WORKSPACE}/engkr_global.h
             -Wno-error=implicit-function-declaration
+            -Wno-error=int-conversion
         run: |
           chmod -R +x scripts/ || true
           chmod -R +x AnyKernel3/ || true
           
-          # نقوم بتعطيل توقف أداة Make عند أول خطأ إذا كانت هناك مشاكل عشوائية
           sed -i 's/set -e/set +e/g' kernel_build_fixed.sh || true
           
           ./kernel_build_fixed.sh
