@@ -1,4 +1,4 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel (Ultimate V27)
+name: Build ENGKR KSU-Next + SUSFS Kernel (Ultimate V28)
 
 on:
   workflow_dispatch:
@@ -87,7 +87,9 @@ jobs:
           cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/ || true
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ || true
           
-          grep -q "susfs.o" fs/Makefile || echo "obj-y += susfs.o" >> fs/Makefile
+          echo "[*] HARDCODING SUSFS Compilation..."
+          # إجبار الكيرنل على تجميع SUSFS كملف أساسي (obj-y) لتتجنب أخطاء Linker
+          sed -i '1s/^/obj-y += susfs.o\n/' fs/Makefile
           
           echo "[*] SAFELY Neutralizing Werror via Python..."
           cat << 'EOF' > fix_werror.py
@@ -98,7 +100,6 @@ jobs:
                       path = os.path.join(root, file)
                       try:
                           with open(path, 'r', encoding='utf-8') as f: content = f.read()
-                          # مسح كلمة -Werror فقط إذا كانت محاطة بمسافات أو في بداية/نهاية السطر
                           new_content = re.sub(r'(?<=^|\s)-Werror(?=\s|$)', '', content)
                           if new_content != content:
                               with open(path, 'w', encoding='utf-8') as f: f.write(new_content)
