@@ -1,4 +1,4 @@
-name: SUSFS 4.9 Backport (The Error Catcher V18)
+name: SUSFS 4.9 Backport (The Final Integration V19)
 
 on:
   workflow_dispatch:
@@ -45,7 +45,6 @@ jobs:
           echo "[*] Bypassing GCC Version Check & Werror..."
           sed -i 's/# error Sorry, your version of GCC is too old - please use 5.1 or newer.//g' include/linux/compiler-gcc.h || true
           
-          # نزع سلاح الـ Werror لمنع التحذيرات من تدمير البناء
           find . -name "Makefile" -exec sed -i 's/-Werror//g' {} + || true
           find . -name "Kbuild" -exec sed -i 's/-Werror//g' {} + || true
           
@@ -56,6 +55,14 @@ jobs:
         run: |
           echo "[*] Generating Defconfig..."
           make ARCH=arm64 CROSS_COMPILE=$GCC64_PATH CROSS_COMPILE_ARM32=$GCC32_PATH ysl-perf_defconfig
+          
+          # ---------------------------------------------------------
+          # THE SECURITY BYPASS (Downgrading Stack Protector)
+          # ---------------------------------------------------------
+          echo "[*] Bypassing Stack Protector Strong..."
+          sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/g' .config
+          sed -i 's/# CONFIG_CC_STACKPROTECTOR_REGULAR is not set/CONFIG_CC_STACKPROTECTOR_REGULAR=y/g' .config
+          # ---------------------------------------------------------
           
           echo "CONFIG_KSU=y" >> .config
           echo "CONFIG_KSU_SUSFS=y" >> .config
@@ -68,7 +75,6 @@ jobs:
           echo " 🚦 INITIATING KERNEL COMPILATION 🚦 "
           echo "============================================================"
           
-          # البناء الذكي: ابنِ بسرعة، وإذا فشلت، ابنِ ببطء لتظهر الخطأ القاتل في النهاية
           make ARCH=arm64 CROSS_COMPILE=$GCC64_PATH CROSS_COMPILE_ARM32=$GCC32_PATH -j$(nproc) || \
           make ARCH=arm64 CROSS_COMPILE=$GCC64_PATH CROSS_COMPILE_ARM32=$GCC32_PATH -j1
           
