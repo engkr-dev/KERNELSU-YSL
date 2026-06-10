@@ -1,4 +1,4 @@
-name: SUSFS 4.9 Backport (The Final Integration V19)
+name: SUSFS 4.9 Backport (The Error Catcher V20)
 
 on:
   workflow_dispatch:
@@ -57,11 +57,13 @@ jobs:
           make ARCH=arm64 CROSS_COMPILE=$GCC64_PATH CROSS_COMPILE_ARM32=$GCC32_PATH ysl-perf_defconfig
           
           # ---------------------------------------------------------
-          # THE SECURITY BYPASS (Downgrading Stack Protector)
+          # THE SECURITY STRIPPER (Total Stack Protector Disable)
           # ---------------------------------------------------------
-          echo "[*] Bypassing Stack Protector Strong..."
+          echo "[*] Disabling Stack Protector completely..."
           sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/g' .config
-          sed -i 's/# CONFIG_CC_STACKPROTECTOR_REGULAR is not set/CONFIG_CC_STACKPROTECTOR_REGULAR=y/g' .config
+          sed -i 's/CONFIG_CC_STACKPROTECTOR_REGULAR=y/# CONFIG_CC_STACKPROTECTOR_REGULAR is not set/g' .config
+          sed -i 's/CONFIG_CC_STACKPROTECTOR=y/# CONFIG_CC_STACKPROTECTOR is not set/g' .config
+          echo "CONFIG_CC_STACKPROTECTOR_NONE=y" >> .config
           # ---------------------------------------------------------
           
           echo "CONFIG_KSU=y" >> .config
