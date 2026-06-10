@@ -1,4 +1,4 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel (Ultimate V23)
+name: Build ENGKR KSU-Next + SUSFS Kernel (Ultimate V24)
 
 on:
   workflow_dispatch:
@@ -78,7 +78,6 @@ jobs:
               if (sscanf(buf, "%x:%x:%x:%x:%x:%x",
                   &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) == 6) {
                   
-                  // مسح الماك الحقيقي وكتابة الماك المزيف مباشرة في قلب المودم!
                   penv->wlan_nv_mac_addr[0] = (char)mac[0];
                   penv->wlan_nv_mac_addr[1] = (char)mac[1];
                   penv->wlan_nv_mac_addr[2] = (char)mac[2];
@@ -119,9 +118,16 @@ jobs:
           # إضافة SUSFS لنظام البناء
           grep -q "susfs.o" fs/Makefile || echo "obj-y += susfs.o" >> fs/Makefile
           
-          echo "[*] Polyfilling zeromount.c safely..."
-          # استبدال الدالة الناقصة بصفر (0) بشكل مباشر ليتجاوزها المترجم بسلام
-          sed -i 's/susfs_is_current_proc_umounted()/0/g' fs/zeromount.c || true
+          echo "[*] Creating Universal Polyfills for legacy KSU-Next calls..."
+          # نحن هنا نكتب دوال وهمية داخل الهيدر الخاص بـ SUSFS لخرس المترجم تماماً
+          cat << 'EOF' >> include/linux/susfs.h
+          
+          /* ==================================================
+             ENGKR UNIVERSAL POLYFILLS FOR LEGACY KSU-NEXT
+             ================================================== */
+          static inline void susfs_start_sdcard_monitor_fn(void) { return; }
+          static inline int susfs_is_current_proc_umounted(void) { return 0; }
+          EOF
           
           echo "[*] Forcing SUSFS & Security Overrides into Defconfigs..."
           find arch/arm64/configs -name "*ysl*" -exec sh -c '
