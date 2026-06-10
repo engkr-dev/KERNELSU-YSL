@@ -1,10 +1,10 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel (V32 - Absolute Victory)
+name: Diagnostic Scan (Collect All Errors)
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-kernel:
+  diagnostic-scan:
     runs-on: ubuntu-latest
     container: ubuntu:20.04
 
@@ -12,226 +12,121 @@ jobs:
       - name: Fix Git Ownership & Install Basics
         run: |
           apt-get update
-          apt-get install -y git wget python3
+          apt-get install -y git wget python3 grep sed gawk findutils
           git config --global --add safe.directory '*'
 
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Setup Build Environment (Dependencies)
+      - name: Setup Build Environment
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
-          ln -s /usr/bin/python2 /usr/bin/python || true
+          apt-get install -y \
+            bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+            gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev \
+            liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils \
+            lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev \
+            python2 sudo tar
+          ln -sf /usr/bin/python2 /usr/bin/python || true
 
-      - name: The Ultimate Python Hack (Carpet Bombing KSU Constants)
+      - name: Prepare Diagnostic Mode
         run: |
           chmod +x kernel_build_fixed.sh || true
           sed -i '/menuconfig/d' kernel_build_fixed.sh || true
-          sed -i 's/# error Sorry, your version of GCC is too old - please use 5.1 or newer.//g' include/linux/compiler-gcc.h || true
-          
-          cat << 'EOF' > patch_ksu.py
-          import os, re
-          pattern = r'(?:static\s+)?const\s+[a-zA-Z0-9_ ]+\s+(KSU_[A-Z0-9_]+)\s*=\s*([^;]+);'
-          for root, dirs, files in os.walk('.'):
-              for file in files:
-                  if not file.endswith(('.c', '.h')): continue
-                  path = os.path.join(root, file)
-                  try:
-                      with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                          content = f.read()
-                      new_content = re.sub(pattern, r'#define \1 \2', content)
-                      if new_content != content:
-                          with open(path, 'w', encoding='utf-8') as f:
-                              f.write(new_content)
-                  except Exception:
-                      pass
-          EOF
-          python3 patch_ksu.py
+          sed -i 's/set -e/set +e/g' kernel_build_fixed.sh || true
+          sed -i 's/make -j/make -k -j/g' kernel_build_fixed.sh || true
 
-      - name: The ENGKR Hardware Backdoor
+      - name: Strip Unsupported Warning Flags
         run: |
-          cat << 'EOF' > patch_mac_backdoor.py
+          cat << 'EOF' > sanitize_flags.py
           import os, re
-          target = 'drivers/soc/qcom/wcnss/wcnss_wlan.c'
-          if os.path.exists(target):
-              with open(target, 'r', encoding='utf-8') as f: content = f.read()
-              backdoor_func = """
-              static ssize_t engkr_mac_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
-                  unsigned int mac[6];
-                  if (!penv) return count;
-                  if (sscanf(buf, "%x:%x:%x:%x:%x:%x", &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) == 6) {
-                      penv->wlan_nv_mac_addr[0] = (char)mac[0]; penv->wlan_nv_mac_addr[1] = (char)mac[1];
-                      penv->wlan_nv_mac_addr[2] = (char)mac[2]; penv->wlan_nv_mac_addr[3] = (char)mac[3];
-                      penv->wlan_nv_mac_addr[4] = (char)mac[4]; penv->wlan_nv_mac_addr[5] = (char)mac[5];
-                  }
-                  return count;
-              }
-              """
-              attr_match = re.search(r'DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*([a-zA-Z0-9_]+)', content)
-              if attr_match:
-                  show_func = attr_match.group(1)
-                  func_match = re.search(rf'static\s+ssize_t\s+{show_func}', content)
-                  if func_match: content = content[:func_match.start()] + backdoor_func + "\n" + content[func_match.start():]
-                  else: content = content.replace(attr_match.group(0), backdoor_func + "\n" + attr_match.group(0))
-                  content = re.sub(r'(static\s+)?DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr[^;]+;', f'static DEVICE_ATTR(wcnss_mac_addr, 0664, {show_func}, engkr_mac_store);', content)
-              with open(target, 'w', encoding='utf-8') as f: f.write(content)
-          EOF
-          python3 patch_mac_backdoor.py
 
-      - name: Inject Pure SUSFS Engine & Forced Headers
-        run: |
-          echo "[*] Injecting SUSFS Core Files..."
-          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
-          cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/ || true
-          cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ || true
-          
-          echo "[*] Creating The Linker Black-Magic Stubs..."
-          cat << 'EOF' > fs/susfs_stubs.c
-          #include <linux/types.h>
-          __attribute__((weak)) void susfs_extra_works(void) {}
-          __attribute__((weak)) int susfs_starts_with(const char *s, const char *prefix) { return 0; }
-          __attribute__((weak)) int susfs_open_redirect_spoof_do_sys_openat(void *a, void *b, int c, int d) { return -1; }
-          __attribute__((weak)) void susfs_generic_fillattr_spoofer(void *a, void *b) {}
-          __attribute__((weak)) void susfs_fake_qstr_name(void *a) {}
-          __attribute__((weak)) int susfs_is_inode_sus_path(void *a) { return 0; }
-          __attribute__((weak)) int susfs_open_redirect_spoof_vfs_readlink(void *a, void *b, int c) { return -1; }
-          __attribute__((weak)) int susfs_is_sdcard_android_data_decrypted(void *a) { return 0; }
-          __attribute__((weak)) int susfs_open_redirect_spoof_vfs_statfs(void *a, void *b) { return -1; }
-          __attribute__((weak)) int susfs_hide_sus_mnts_for_non_su_procs(void *a, void *b) { return 0; }
-          __attribute__((weak)) int susfs_show_map_vma_spoofer(void *a, void *b) { return 0; }
-          __attribute__((weak)) int susfs_open_redirect_spoof_show_map_vma(void *a, void *b) { return 0; }
-          __attribute__((weak)) int susfs_open_redirect_spoof_do_proc_readlink(void *a, void *b, int c) { return -1; }
-          __attribute__((weak)) int susfs_open_redirect_spoof_seq_show(void *a, void *b) { return 0; }
-          __attribute__((weak)) int susfs_spoof_cmdline_or_bootconfig(void *a) { return 0; }
-          __attribute__((weak)) void susfs_add_sus_path_loop(void **arg) {}
-          __attribute__((weak)) void susfs_set_hide_sus_mnts_for_non_su_procs(void **arg) {}
-          __attribute__((weak)) void susfs_enable_log(void **arg) {}
-          __attribute__((weak)) void susfs_set_cmdline_or_bootconfig(void **arg) {}
-          __attribute__((weak)) void susfs_add_open_redirect(void **arg) {}
-          __attribute__((weak)) void susfs_add_sus_map(void **arg) {}
-          __attribute__((weak)) void susfs_set_avc_log_spoofing(void **arg) {}
-          __attribute__((weak)) void susfs_get_enabled_features(void **arg) {}
-          __attribute__((weak)) void susfs_show_variant(void **arg) {}
-          __attribute__((weak)) void susfs_show_version(void **arg) {}
-          __attribute__((weak)) void susfs_start_sdcard_monitor_fn(void) {}
-          __attribute__((weak)) int susfs_is_current_proc_umounted(void) { return 0; }
-          EOF
-          
-          sed -i '1s/^/obj-y += susfs.o susfs_stubs.o\n/' fs/Makefile
+          bad_patterns = [
+              r'-Wno-error=int-conversion',
+              r'-Werror=int-conversion',
+              r'-Wno-int-conversion',
+              r'-Wno-error=incompatible-pointer-types',
+              r'-Werror=incompatible-pointer-types',
+              r'-Wno-incompatible-pointer-types',
+              r'-Wno-gcc-compat',
+          ]
 
-          echo "[*] Building the Universal Global Header..."
-          # نضعه في المسار الأساسي ليقرأه بسهولة
-          cat << 'EOF' > engkr_global.h
-          #ifndef _ENGKR_GLOBAL_H
-          #define _ENGKR_GLOBAL_H
-          /* ENGKR CONSTANTS */
-          #ifndef SUSFS_MAGIC
-          #define SUSFS_MAGIC 0x53555314
-          #endif
-          #ifndef CMD_SUSFS_ADD_SUS_PATH_LOOP
-          #define CMD_SUSFS_ADD_SUS_PATH_LOOP 10
-          #endif
-          #ifndef CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS
-          #define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS 11
-          #endif
-          #ifndef CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG
-          #define CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG 12
-          #endif
-          #ifndef CMD_SUSFS_ADD_SUS_MAP
-          #define CMD_SUSFS_ADD_SUS_MAP 14
-          #endif
-          #ifndef CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING
-          #define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 15
-          #endif
-          #ifndef CMD_SUSFS_SHOW_ENABLED_FEATURES
-          #define CMD_SUSFS_SHOW_ENABLED_FEATURES 16
-          #endif
-          #ifndef CMD_SUSFS_SHOW_VARIANT
-          #define CMD_SUSFS_SHOW_VARIANT 17
-          #endif
-          #ifndef CMD_SUSFS_SHOW_VERSION
-          #define CMD_SUSFS_SHOW_VERSION 18
-          #endif
-          
-          /* KSU-NEXT SUSFS PROTOTYPES */
-          void susfs_add_sus_path_loop(void **arg);
-          void susfs_set_hide_sus_mnts_for_non_su_procs(void **arg);
-          void susfs_enable_log(void **arg);
-          void susfs_set_cmdline_or_bootconfig(void **arg);
-          void susfs_add_open_redirect(void **arg);
-          void susfs_add_sus_map(void **arg);
-          void susfs_set_avc_log_spoofing(void **arg);
-          void susfs_get_enabled_features(void **arg);
-          void susfs_show_variant(void **arg);
-          void susfs_show_version(void **arg);
-          void susfs_start_sdcard_monitor_fn(void);
-          int susfs_is_current_proc_umounted(void);
-          
-          /* TYPE CASTING MACROS */
-          #define susfs_add_sus_path(arg) susfs_add_sus_path((void*)(arg))
-          #define susfs_add_sus_kstat(arg) susfs_add_sus_kstat((void*)(arg))
-          #define susfs_update_sus_kstat(arg) susfs_update_sus_kstat((void*)(arg))
-          #define susfs_add_try_umount(arg) susfs_add_try_umount((void*)(arg))
-          #define susfs_set_uname(arg) susfs_set_uname((void*)(arg))
-          #endif
-          EOF
+          file_names = {'Makefile', 'Kbuild'}
+          exts = ('.mk', '.sh', '.py')
 
-          echo "[*] SAFELY Neutralizing Werror via Python..."
-          cat << 'EOF' > fix_werror.py
-          import os, re
+          def clean_text(text):
+              original = text
+              for p in bad_patterns:
+                  text = re.sub(r'(^|\\s)'+p+r'(?=\\s|$)', ' ', text)
+              text = re.sub(r'[ \\t]+', ' ', text)
+              text = re.sub(r' *\n', '\n', text)
+              return text, text != original
+
           for root, dirs, files in os.walk('.'):
-              for file in files:
-                  if file == 'Makefile' or file == 'Kbuild':
-                      path = os.path.join(root, file)
+              for f in files:
+                  if f in file_names or f.endswith(exts):
+                      path = os.path.join(root, f)
                       try:
-                          with open(path, 'r', encoding='utf-8') as f: content = f.read()
-                          new_content = re.sub(r'(?<=^|\s)-Werror(?=\s|$)', '', content)
-                          if new_content != content:
-                              with open(path, 'w', encoding='utf-8') as f: f.write(new_content)
+                          with open(path, 'r', encoding='utf-8', errors='ignore') as fh:
+                              data = fh.read()
+                          new_data, changed = clean_text(data)
+                          if changed:
+                              with open(path, 'w', encoding='utf-8') as fh:
+                                  fh.write(new_data)
                       except Exception:
                           pass
           EOF
-          python3 fix_werror.py
-          
-          sed -i 's/susfs_is_current_proc_umounted()/0/g' drivers/kernelsu/fs/zeromount.c || true
-          sed -i 's/susfs_is_current_proc_umounted()/0/g' drivers/kernelsu/feature/kernel_umount.c || true
-          
-          find arch/arm64/configs -name "*ysl*" -exec sh -c '
-            echo "CONFIG_KSU=y" >> "$1"
-            echo "CONFIG_KSU_SUSFS=y" >> "$1"
-            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$1"
-            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "$1"
-            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> "$1"
-            echo "# CONFIG_KSU_SUSFS_OPEN_REDIRECT is not set" >> "$1"
-            sed -i "s/CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/g" "$1"
-            sed -i "s/CONFIG_CC_STACKPROTECTOR_REGULAR=y/# CONFIG_CC_STACKPROTECTOR_REGULAR is not set/g" "$1"
-            echo "CONFIG_CC_STACKPROTECTOR_NONE=y" >> "$1"
-          ' _ {} \;
+          python3 sanitize_flags.py
 
-      - name: Execute Kernel Build Script
+      - name: Run Diagnostic Build
         env:
-          # المسار المطلق للـ WORKSPACE الخاص بـ GITHUB_WORKSPACE
-          # مع إضافة Wno-error=int-conversion للتحذير الذي ظهر في رسالتك السابقة
-          KCFLAGS: >-
-            -include ${GITHUB_WORKSPACE}/engkr_global.h
-            -Wno-error=implicit-function-declaration
-            -Wno-error=int-conversion
+          MAKEFLAGS: "-k"
+          KCFLAGS: "-fmax-errors=500"
         run: |
-          chmod -R +x scripts/ || true
-          chmod -R +x AnyKernel3/ || true
-          
-          sed -i 's/set -e/set +e/g' kernel_build_fixed.sh || true
-          
-          ./kernel_build_fixed.sh
+          echo "[*] Running diagnostic build..."
+          ./kernel_build_fixed.sh 2>&1 | tee build_full.log || true
 
-      - name: Upload Kernel Artifact
+      - name: Extract Final Error Report
+        run: |
+          {
+            echo "======================================================="
+            echo "FINAL DIAGNOSTIC REPORT"
+            echo "======================================================="
+            echo
+            echo "[1] Fatal compiler / linker / make errors"
+            echo "-------------------------------------------------------"
+            grep -nEi \
+              "fatal error:|error:|undefined reference|multiple definition|No such file|ld: error:|collect2: error:|make(\[[0-9]+\])?: \*\*\*" \
+              build_full.log || true
+            echo
+            echo "[2] KernelSU / SUSFS related lines"
+            echo "-------------------------------------------------------"
+            grep -nEi \
+              "kernelsu|susfs|supercall|dispatch\.c|supercall\.c|implicit declaration|undeclared|incompatible pointer" \
+              build_full.log || true
+            echo
+            echo "[3] Warning flags unsupported by compiler"
+            echo "-------------------------------------------------------"
+            grep -nEi \
+              "no option -W|unrecognized command line option" \
+              build_full.log || true
+            echo
+            echo "[4] Last 200 lines for context"
+            echo "-------------------------------------------------------"
+            tail -n 200 build_full.log || true
+          } > extracted_errors_final.txt
+
+          echo "======================================================="
+          echo "DIAGNOSTIC SUMMARY"
+          echo "======================================================="
+          sed -n '1,220p' extracted_errors_final.txt || true
+
+      - name: Upload Diagnostic Logs
         uses: actions/upload-artifact@v4
         with:
-          name: ENGKR-YSL-KSU-SUSFS-ULTIMATE
+          name: Diagnostic-Logs-Full
           path: |
-            build/Image.gz-dtb
-            *.zip
-            out/arch/arm64/boot/Image.gz-dtb
+            build_full.log
+            extracted_errors_final.txt
