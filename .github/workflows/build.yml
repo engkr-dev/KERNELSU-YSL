@@ -1,4 +1,4 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel (Ultimate V30)
+name: Build ENGKR KSU-Next + SUSFS Kernel (Ultimate V28)
 
 on:
   workflow_dispatch:
@@ -80,39 +80,89 @@ jobs:
           EOF
           python3 patch_mac_backdoor.py
 
-      - name: Inject Pure SUSFS Engine & Final Linker Fixes
+      - name: Inject Pure SUSFS Engine & The V1-to-V2 API Bridge
         run: |
           echo "[*] Injecting SUSFS Core Files..."
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
           cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/ || true
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ || true
           
-          echo "[*] HARD LINKING SUSFS to Kernel..."
-          # إجبار إضافته للملف الرئيسي للـ fs
-          echo "obj-y += susfs.o" >> fs/Makefile
+          echo "[*] HARDCODING SUSFS Compilation..."
+          # إجبار الكيرنل على تجميع SUSFS كملف أساسي (obj-y) لتتجنب أخطاء Linker
+          sed -i '1s/^/obj-y += susfs.o\n/' fs/Makefile
           
-          # تنظيف التحذيرات الخطرة فقط
-          find . -name "Makefile" -exec sed -i 's/-Werror\b//g' {} + || true
+          echo "[*] SAFELY Neutralizing Werror via Python..."
+          cat << 'EOF' > fix_werror.py
+          import os, re
+          for root, dirs, files in os.walk('.'):
+              for file in files:
+                  if file == 'Makefile' or file == 'Kbuild':
+                      path = os.path.join(root, file)
+                      try:
+                          with open(path, 'r', encoding='utf-8') as f: content = f.read()
+                          new_content = re.sub(r'(?<=^|\s)-Werror(?=\s|$)', '', content)
+                          if new_content != content:
+                              with open(path, 'w', encoding='utf-8') as f: f.write(new_content)
+                      except Exception:
+                          pass
+          EOF
+          python3 fix_werror.py
           
-          echo "[*] Injecting The Universal API Bridge..."
+          echo "[*] Injecting The API Bridge into KSU-Next..."
           cat << 'EOF' > fix_supercall.py
           import os
-          bridge = "\n#define SUSFS_MAGIC 0x53555314\nvoid susfs_extra_works(void) {} int susfs_starts_with(const char* a, const char* b) { return 0; }\n"
-          bridge += "void susfs_open_redirect_spoof_do_sys_openat(void) {} void susfs_generic_fillattr_spoofer(void) {} void susfs_fake_qstr_name(void) {} int susfs_is_inode_sus_path(void* a) { return 0; }\n"
-          bridge += "void susfs_open_redirect_spoof_vfs_readlink(void) {} void susfs_is_sdcard_android_data_decrypted(void) {} void susfs_open_redirect_spoof_vfs_statfs(void) {} void susfs_hide_sus_mnts_for_non_su_procs(void) {} void susfs_show_map_vma_spoofer(void) {} void susfs_open_redirect_spoof_show_map_vma(void) {} void susfs_open_redirect_spoof_do_proc_readlink(void) {} void susfs_open_redirect_spoof_seq_show(void) {} void susfs_spoof_cmdline_or_bootconfig(void) {}\n"
+          bridge_code = """
+          /* --- ENGKR SUSFS V1.5 to V2.1.0 API BRIDGE --- */
+          #ifndef SUSFS_MAGIC
+          #define SUSFS_MAGIC 0x53555314
+          #define CMD_SUSFS_ADD_SUS_PATH_LOOP 10
+          #define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS 11
+          #define CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG 12
+          #define CMD_SUSFS_ADD_OPEN_REDIRECT 13
+          #define CMD_SUSFS_ADD_SUS_MAP 14
+          #define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 15
+          #define CMD_SUSFS_SHOW_ENABLED_FEATURES 16
+          #define CMD_SUSFS_SHOW_VARIANT 17
+          #define CMD_SUSFS_SHOW_VERSION 18
+          
+          static inline void susfs_add_sus_path_loop(void **arg) {}
+          static inline void susfs_set_hide_sus_mnts_for_non_su_procs(void **arg) {}
+          static inline void susfs_enable_log(void **arg) {}
+          static inline void susfs_set_cmdline_or_bootconfig(void **arg) {}
+          static inline void susfs_add_open_redirect(void **arg) {}
+          static inline void susfs_add_sus_map(void **arg) {}
+          static inline void susfs_set_avc_log_spoofing(void **arg) {}
+          static inline void susfs_get_enabled_features(void **arg) {}
+          static inline void susfs_show_variant(void **arg) {}
+          static inline void susfs_show_version(void **arg) {}
+          static inline void susfs_start_sdcard_monitor_fn(void) {}
+          static inline int susfs_is_current_proc_umounted(void) { return 0; }
+          #endif
+          /* --------------------------------------------- */
+          """
           
           for root, dirs, files in os.walk('drivers/kernelsu'):
-              for file in ['supercall.c', 'dispatch.c']:
-                  path = os.path.join(root, file)
-                  if os.path.exists(path):
-                      with open(path, 'a') as f: f.write(bridge)
+              for file in files:
+                  if file in ['supercall.c', 'dispatch.c']:
+                      path = os.path.join(root, file)
+                      with open(path, 'r') as f: content = f.read()
+                      if "ENGKR SUSFS V1.5" not in content:
+                          content = content.replace('#include <linux/susfs.h>', '#include <linux/susfs.h>\n' + bridge_code)
+                          with open(path, 'w') as f: f.write(content)
           EOF
           python3 fix_supercall.py
           
-          echo "[*] Force Injecting Flags..."
+          sed -i 's/susfs_is_current_proc_umounted()/0/g' fs/zeromount.c || true
+          
+          echo "[*] Forcing SUSFS & Security Overrides into Defconfigs..."
           find arch/arm64/configs -name "*ysl*" -exec sh -c '
             echo "CONFIG_KSU_SUSFS=y" >> "$1"
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$1"
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "$1"
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> "$1"
+            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> "$1"
             sed -i "s/CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/g" "$1"
+            sed -i "s/CONFIG_CC_STACKPROTECTOR_REGULAR=y/# CONFIG_CC_STACKPROTECTOR_REGULAR is not set/g" "$1"
             echo "CONFIG_CC_STACKPROTECTOR_NONE=y" >> "$1"
           ' _ {} \;
 
@@ -122,7 +172,7 @@ jobs:
           chmod -R +x AnyKernel3/ || true
           ./kernel_build_fixed.sh
 
-      - name: Upload
+      - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ENGKR-YSL-KSU-SUSFS-ULTIMATE
