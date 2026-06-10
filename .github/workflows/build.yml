@@ -143,6 +143,9 @@ jobs:
           int susfs_open_redirect_spoof_do_proc_readlink(void *a, void *b, int c);
           int susfs_open_redirect_spoof_seq_show(void *a, void *b);
           int susfs_spoof_cmdline_or_bootconfig(void *a);
+          /* Added Prototypes for dispatch.c */
+          void susfs_start_sdcard_monitor_fn(void);
+          int susfs_is_current_proc_umounted(void);
           EOF
 
           echo "[*] SAFELY Neutralizing Werror via Python..."
@@ -162,6 +165,7 @@ jobs:
           EOF
           python3 fix_werror.py
           
+          # Optional: Nullify calls manually in case header is not included
           sed -i 's/susfs_is_current_proc_umounted()/0/g' drivers/kernelsu/fs/zeromount.c || true
           sed -i 's/susfs_is_current_proc_umounted()/0/g' drivers/kernelsu/feature/kernel_umount.c || true
           
