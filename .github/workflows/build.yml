@@ -1,10 +1,10 @@
-name: Diagnostic Dry-Run KSU-Next (Error Scanner)
+name: Build ENGKR KSU-Next + SUSFS Kernel (Ultimate V29)
 
 on:
   workflow_dispatch:
 
 jobs:
-  diagnostic-scan:
+  build-kernel:
     runs-on: ubuntu-latest
     container: ubuntu:20.04
 
@@ -81,7 +81,7 @@ jobs:
           EOF
           python3 patch_mac_backdoor.py
 
-      - name: Inject Pure SUSFS Engine (With Constants & Prototypes)
+      - name: Inject Pure SUSFS Engine (The Nuke Method)
         run: |
           echo "[*] Injecting SUSFS Core Files..."
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
@@ -122,10 +122,13 @@ jobs:
           
           sed -i '1s/^/obj-y += susfs.o susfs_stubs.o\n/' fs/Makefile
           
-          echo "[*] Injecting Constants and Prototypes to Header..."
-          cat << 'EOF' >> include/linux/susfs.h
-
-          /* ENGKR CONSTANTS BRIDGE */
+          echo "[*] Nuke Method: Injecting Headers DIRECTLY into KSU-Next C Source Files..."
+          cat << 'EOF' > fix_supercall.py
+          import os
+          
+          # الحزمة النووية التي تحل كل أخطاء التعريفات والمؤشرات
+          magic_header = """
+          /* ENGKR DIRECT INJECTION */
           #ifndef SUSFS_MAGIC
           #define SUSFS_MAGIC 0x53555314
           #endif
@@ -153,26 +156,42 @@ jobs:
           #ifndef CMD_SUSFS_SHOW_VERSION
           #define CMD_SUSFS_SHOW_VERSION 18
           #endif
-
-          /* ENGKR PROTOTYPES BRIDGE */
-          void susfs_extra_works(void);
-          int susfs_starts_with(const char *s, const char *prefix);
-          int susfs_open_redirect_spoof_do_sys_openat(void *a, void *b, int c, int d);
-          void susfs_generic_fillattr_spoofer(void *a, void *b);
-          void susfs_fake_qstr_name(void *a);
-          int susfs_is_inode_sus_path(void *a);
-          int susfs_open_redirect_spoof_vfs_readlink(void *a, void *b, int c);
-          int susfs_is_sdcard_android_data_decrypted(void *a);
-          int susfs_open_redirect_spoof_vfs_statfs(void *a, void *b);
-          int susfs_hide_sus_mnts_for_non_su_procs(void *a, void *b);
-          int susfs_show_map_vma_spoofer(void *a, void *b);
-          int susfs_open_redirect_spoof_show_map_vma(void *a, void *b);
-          int susfs_open_redirect_spoof_do_proc_readlink(void *a, void *b, int c);
-          int susfs_open_redirect_spoof_seq_show(void *a, void *b);
-          int susfs_spoof_cmdline_or_bootconfig(void *a);
+          
+          void susfs_add_sus_path_loop(void **arg);
+          void susfs_set_hide_sus_mnts_for_non_su_procs(void **arg);
+          void susfs_enable_log(void **arg);
+          void susfs_set_cmdline_or_bootconfig(void **arg);
+          void susfs_add_open_redirect(void **arg);
+          void susfs_add_sus_map(void **arg);
+          void susfs_set_avc_log_spoofing(void **arg);
+          void susfs_get_enabled_features(void **arg);
+          void susfs_show_variant(void **arg);
+          void susfs_show_version(void **arg);
           void susfs_start_sdcard_monitor_fn(void);
           int susfs_is_current_proc_umounted(void);
+          
+          /* تحييد أخطاء تمرير void** بدلاً من struct */
+          #define susfs_add_sus_path(arg) susfs_add_sus_path((void*)(arg))
+          #define susfs_add_sus_kstat(arg) susfs_add_sus_kstat((void*)(arg))
+          #define susfs_update_sus_kstat(arg) susfs_update_sus_kstat((void*)(arg))
+          #define susfs_add_try_umount(arg) susfs_add_try_umount((void*)(arg))
+          #define susfs_set_uname(arg) susfs_set_uname((void*)(arg))
+          /* END ENGKR DIRECT INJECTION */
+          """
+          
+          # نقوم بالبحث عن ملف supercall و dispatch وحقن الكود في السطر الثاني مباشرة بعد #include
+          for root, dirs, files in os.walk('drivers/kernelsu/supercall'):
+              for file in ['supercall.c', 'dispatch.c']:
+                  if file in files:
+                      path = os.path.join(root, file)
+                      with open(path, 'r') as f:
+                          content = f.read()
+                      if "ENGKR DIRECT INJECTION" not in content:
+                          content = content.replace('#include <linux/susfs.h>', '#include <linux/susfs.h>\n' + magic_header)
+                          with open(path, 'w') as f:
+                              f.write(content)
           EOF
+          python3 fix_supercall.py
 
           echo "[*] SAFELY Neutralizing Werror via Python..."
           cat << 'EOF' > fix_werror.py
@@ -194,6 +213,7 @@ jobs:
           sed -i 's/susfs_is_current_proc_umounted()/0/g' drivers/kernelsu/fs/zeromount.c || true
           sed -i 's/susfs_is_current_proc_umounted()/0/g' drivers/kernelsu/feature/kernel_umount.c || true
           
+          echo "[*] Forcing SUSFS Overrides into Defconfigs..."
           find arch/arm64/configs -name "*ysl*" -exec sh -c '
             echo "CONFIG_KSU=y" >> "$1"
             echo "CONFIG_KSU_SUSFS=y" >> "$1"
@@ -206,42 +226,17 @@ jobs:
             echo "CONFIG_CC_STACKPROTECTOR_NONE=y" >> "$1"
           ' _ {} \;
 
-      - name: Execute DIAGNOSTIC Kernel Build (Scanner Mode)
-        env:
-          # إجبار Make على عدم التوقف عند الأخطاء وإكمال حصد بقية الأخطاء
-          MAKEFLAGS: "-k"
-          KCFLAGS: "-fmax-errors=500 -Wno-error"
+      - name: Execute Kernel Build Script
         run: |
           chmod -R +x scripts/ || true
           chmod -R +x AnyKernel3/ || true
-          
-          # إلغاء خاصية الإيقاف التلقائي للسكربت عند الخطأ (set -e) وتعديل خيارات Make
-          sed -i 's/set -e/set +e/g' kernel_build_fixed.sh || true
-          sed -i 's/make -j/make -k -j/g' kernel_build_fixed.sh || true
-          
-          echo "[*] RUNNING IN DIAGNOSTIC MODE: Gathering all errors in the background..."
-          # تشغيل السكربت وحفظ كامل المخرجات في ملف بدون إظهاره بالكامل في الشاشة
-          ./kernel_build_fixed.sh 2>&1 | tee build_full.log || true
-          
-          echo "======================================================="
-          echo "🔥 DIAGNOSTIC REPORT: ALL ERRORS EXTRACTED 🔥"
-          echo "======================================================="
-          
-          # استخراج الأخطاء الجوهرية فقط مع سطر قبل وسطرين بعد لفهم السياق
-          grep -iE "error:|undefined reference|implicit declaration|undeclared" build_full.log -B 1 -A 2 > extracted_errors.txt || true
-          
-          if [ -s extracted_errors.txt ]; then
-              cat extracted_errors.txt
-              echo "======================================================="
-              echo "❌ Errors found! Download the 'Diagnostic-Logs' artifact below."
-          else
-              echo "✅ No compilation errors detected! The build succeeded."
-          fi
+          ./kernel_build_fixed.sh
 
-      - name: Upload Diagnostic Logs
+      - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Diagnostic-Logs-ENGKR
+          name: ENGKR-YSL-KSU-SUSFS-ULTIMATE
           path: |
-            build_full.log
-            extracted_errors.txt
+            build/Image.gz-dtb
+            *.zip
+            out/arch/arm64/boot/Image.gz-dtb
