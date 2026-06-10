@@ -1,96 +1,69 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel (Ultimate V28)
-
-on:
-  workflow_dispatch:
-
-jobs:
-  build-kernel:
-    runs-on: ubuntu-latest
-    container: ubuntu:20.04
-
-    steps:
-      - name: Fix Git Ownership & Install Basics
-        run: |
-          apt-get update
-          apt-get install -y git wget python3
-          git config --global --add safe.directory '*'
-
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Setup Build Environment (Dependencies)
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python2 sudo tar
-          ln -s /usr/bin/python2 /usr/bin/python || true
-
-      - name: The Ultimate Python Hack (Carpet Bombing KSU Constants)
-        run: |
-          chmod +x kernel_build_fixed.sh || true
-          sed -i '/menuconfig/d' kernel_build_fixed.sh || true
-          sed -i 's/# error Sorry, your version of GCC is too old - please use 5.1 or newer.//g' include/linux/compiler-gcc.h || true
-          
-          cat << 'EOF' > patch_ksu.py
-          import os, re
-          pattern = r'(?:static\s+)?const\s+[a-zA-Z0-9_ ]+\s+(KSU_[A-Z0-9_]+)\s*=\s*([^;]+);'
-          for root, dirs, files in os.walk('.'):
-              for file in files:
-                  if not file.endswith(('.c', '.h')): continue
-                  path = os.path.join(root, file)
-                  try:
-                      with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                          content = f.read()
-                      new_content = re.sub(pattern, r'#define \1 \2', content)
-                      if new_content != content:
-                          with open(path, 'w', encoding='utf-8') as f:
-                              f.write(new_content)
-                  except Exception:
-                      pass
-          EOF
-          python3 patch_ksu.py
-
-      - name: The ENGKR Hardware Backdoor (WCNSS Direct Memory Override)
-        run: |
-          cat << 'EOF' > patch_mac_backdoor.py
-          import os, re
-          target = 'drivers/soc/qcom/wcnss/wcnss_wlan.c'
-          if os.path.exists(target):
-              with open(target, 'r', encoding='utf-8') as f: content = f.read()
-              backdoor_func = """
-              static ssize_t engkr_mac_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
-                  unsigned int mac[6];
-                  if (!penv) return count;
-                  if (sscanf(buf, "%x:%x:%x:%x:%x:%x", &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) == 6) {
-                      penv->wlan_nv_mac_addr[0] = (char)mac[0]; penv->wlan_nv_mac_addr[1] = (char)mac[1];
-                      penv->wlan_nv_mac_addr[2] = (char)mac[2]; penv->wlan_nv_mac_addr[3] = (char)mac[3];
-                      penv->wlan_nv_mac_addr[4] = (char)mac[4]; penv->wlan_nv_mac_addr[5] = (char)mac[5];
-                  }
-                  return count;
-              }
-              """
-              attr_match = re.search(r'DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*([a-zA-Z0-9_]+)', content)
-              if attr_match:
-                  show_func = attr_match.group(1)
-                  func_match = re.search(rf'static\s+ssize_t\s+{show_func}', content)
-                  if func_match: content = content[:func_match.start()] + backdoor_func + "\n" + content[func_match.start():]
-                  else: content = content.replace(attr_match.group(0), backdoor_func + "\n" + attr_match.group(0))
-                  content = re.sub(r'(static\s+)?DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr[^;]+;', f'static DEVICE_ATTR(wcnss_mac_addr, 0664, {show_func}, engkr_mac_store);', content)
-              with open(target, 'w', encoding='utf-8') as f: f.write(content)
-          EOF
-          python3 patch_mac_backdoor.py
-
-      - name: Inject Pure SUSFS Engine & The V1-to-V2 API Bridge
+      - name: Inject Pure SUSFS Engine & The Ultimate Linker Hack
         run: |
           echo "[*] Injecting SUSFS Core Files..."
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
           cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/ || true
           cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ || true
           
-          echo "[*] HARDCODING SUSFS Compilation..."
-          # إجبار الكيرنل على تجميع SUSFS كملف أساسي (obj-y) لتتجنب أخطاء Linker
-          sed -i '1s/^/obj-y += susfs.o\n/' fs/Makefile
+          echo "[*] Creating The Linker Black-Magic Stubs (Weak Symbols)..."
+          # هذا الملف سيحتوي على نسخ احتياطية لكل الدوال التي يبحث عنها KSU-Next
+          # attribute((weak)) تعني: "استخدم هذه الدالة فقط إذا لم تجد الدالة الأصلية في susfs.c"
+          cat << 'EOF' > fs/susfs_stubs.c
+          #include <linux/types.h>
+
+          __attribute__((weak)) void susfs_extra_works(void) {}
+          __attribute__((weak)) int susfs_starts_with(const char *s, const char *prefix) { return 0; }
+          __attribute__((weak)) int susfs_open_redirect_spoof_do_sys_openat(void *a, void *b, int c, int d) { return -1; }
+          __attribute__((weak)) void susfs_generic_fillattr_spoofer(void *a, void *b) {}
+          __attribute__((weak)) void susfs_fake_qstr_name(void *a) {}
+          __attribute__((weak)) int susfs_is_inode_sus_path(void *a) { return 0; }
+          __attribute__((weak)) int susfs_open_redirect_spoof_vfs_readlink(void *a, void *b, int c) { return -1; }
+          __attribute__((weak)) int susfs_is_sdcard_android_data_decrypted(void *a) { return 0; }
+          __attribute__((weak)) int susfs_open_redirect_spoof_vfs_statfs(void *a, void *b) { return -1; }
+          __attribute__((weak)) int susfs_hide_sus_mnts_for_non_su_procs(void *a, void *b) { return 0; }
+          __attribute__((weak)) int susfs_show_map_vma_spoofer(void *a, void *b) { return 0; }
+          __attribute__((weak)) int susfs_open_redirect_spoof_show_map_vma(void *a, void *b) { return 0; }
+          __attribute__((weak)) int susfs_open_redirect_spoof_do_proc_readlink(void *a, void *b, int c) { return -1; }
+          __attribute__((weak)) int susfs_open_redirect_spoof_seq_show(void *a, void *b) { return 0; }
+          __attribute__((weak)) int susfs_spoof_cmdline_or_bootconfig(void *a) { return 0; }
+          __attribute__((weak)) void susfs_add_sus_path_loop(void **arg) {}
+          __attribute__((weak)) void susfs_set_hide_sus_mnts_for_non_su_procs(void **arg) {}
+          __attribute__((weak)) void susfs_enable_log(void **arg) {}
+          __attribute__((weak)) void susfs_set_cmdline_or_bootconfig(void **arg) {}
+          __attribute__((weak)) void susfs_add_open_redirect(void **arg) {}
+          __attribute__((weak)) void susfs_add_sus_map(void **arg) {}
+          __attribute__((weak)) void susfs_set_avc_log_spoofing(void **arg) {}
+          __attribute__((weak)) void susfs_get_enabled_features(void **arg) {}
+          __attribute__((weak)) void susfs_show_variant(void **arg) {}
+          __attribute__((weak)) void susfs_show_version(void **arg) {}
+          __attribute__((weak)) void susfs_start_sdcard_monitor_fn(void) {}
+          __attribute__((weak)) int susfs_is_current_proc_umounted(void) { return 0; }
+          EOF
           
+          echo "[*] HARDCODING SUSFS & Stubs Compilation..."
+          sed -i '1s/^/obj-y += susfs.o susfs_stubs.o\n/' fs/Makefile
+          
+          echo "[*] Injecting Missing Prototypes to Header (To Fix Implicit Declarations)..."
+          cat << 'EOF' >> include/linux/susfs.h
+
+          /* ENGKR PROTOTYPES BRIDGE */
+          void susfs_extra_works(void);
+          int susfs_starts_with(const char *s, const char *prefix);
+          int susfs_open_redirect_spoof_do_sys_openat(void *a, void *b, int c, int d);
+          void susfs_generic_fillattr_spoofer(void *a, void *b);
+          void susfs_fake_qstr_name(void *a);
+          int susfs_is_inode_sus_path(void *a);
+          int susfs_open_redirect_spoof_vfs_readlink(void *a, void *b, int c);
+          int susfs_is_sdcard_android_data_decrypted(void *a);
+          int susfs_open_redirect_spoof_vfs_statfs(void *a, void *b);
+          int susfs_hide_sus_mnts_for_non_su_procs(void *a, void *b);
+          int susfs_show_map_vma_spoofer(void *a, void *b);
+          int susfs_open_redirect_spoof_show_map_vma(void *a, void *b);
+          int susfs_open_redirect_spoof_do_proc_readlink(void *a, void *b, int c);
+          int susfs_open_redirect_spoof_seq_show(void *a, void *b);
+          int susfs_spoof_cmdline_or_bootconfig(void *a);
+          EOF
+
           echo "[*] SAFELY Neutralizing Werror via Python..."
           cat << 'EOF' > fix_werror.py
           import os, re
@@ -108,75 +81,20 @@ jobs:
           EOF
           python3 fix_werror.py
           
-          echo "[*] Injecting The API Bridge into KSU-Next..."
-          cat << 'EOF' > fix_supercall.py
-          import os
-          bridge_code = """
-          /* --- ENGKR SUSFS V1.5 to V2.1.0 API BRIDGE --- */
-          #ifndef SUSFS_MAGIC
-          #define SUSFS_MAGIC 0x53555314
-          #define CMD_SUSFS_ADD_SUS_PATH_LOOP 10
-          #define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS 11
-          #define CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG 12
-          #define CMD_SUSFS_ADD_OPEN_REDIRECT 13
-          #define CMD_SUSFS_ADD_SUS_MAP 14
-          #define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 15
-          #define CMD_SUSFS_SHOW_ENABLED_FEATURES 16
-          #define CMD_SUSFS_SHOW_VARIANT 17
-          #define CMD_SUSFS_SHOW_VERSION 18
+          # إيقاف فحص mount المؤقت الخاص بـ KSU لأنه يعتمد على دوال متقدمة
+          sed -i 's/susfs_is_current_proc_umounted()/0/g' drivers/kernelsu/fs/zeromount.c || true
+          sed -i 's/susfs_is_current_proc_umounted()/0/g' drivers/kernelsu/feature/kernel_umount.c || true
           
-          static inline void susfs_add_sus_path_loop(void **arg) {}
-          static inline void susfs_set_hide_sus_mnts_for_non_su_procs(void **arg) {}
-          static inline void susfs_enable_log(void **arg) {}
-          static inline void susfs_set_cmdline_or_bootconfig(void **arg) {}
-          static inline void susfs_add_open_redirect(void **arg) {}
-          static inline void susfs_add_sus_map(void **arg) {}
-          static inline void susfs_set_avc_log_spoofing(void **arg) {}
-          static inline void susfs_get_enabled_features(void **arg) {}
-          static inline void susfs_show_variant(void **arg) {}
-          static inline void susfs_show_version(void **arg) {}
-          static inline void susfs_start_sdcard_monitor_fn(void) {}
-          static inline int susfs_is_current_proc_umounted(void) { return 0; }
-          #endif
-          /* --------------------------------------------- */
-          """
-          
-          for root, dirs, files in os.walk('drivers/kernelsu'):
-              for file in files:
-                  if file in ['supercall.c', 'dispatch.c']:
-                      path = os.path.join(root, file)
-                      with open(path, 'r') as f: content = f.read()
-                      if "ENGKR SUSFS V1.5" not in content:
-                          content = content.replace('#include <linux/susfs.h>', '#include <linux/susfs.h>\n' + bridge_code)
-                          with open(path, 'w') as f: f.write(content)
-          EOF
-          python3 fix_supercall.py
-          
-          sed -i 's/susfs_is_current_proc_umounted()/0/g' fs/zeromount.c || true
-          
-          echo "[*] Forcing SUSFS & Security Overrides into Defconfigs..."
+          echo "[*] Forcing SUSFS Overrides into Defconfigs (Disabling OPEN_REDIRECT for 4.9 stability)..."
           find arch/arm64/configs -name "*ysl*" -exec sh -c '
+            echo "CONFIG_KSU=y" >> "$1"
             echo "CONFIG_KSU_SUSFS=y" >> "$1"
             echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$1"
             echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "$1"
             echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> "$1"
-            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> "$1"
+            # تم إيقاف OPEN_REDIRECT عمداً لتفادي تعقيدات الـ VFS في نواة 4.9
+            echo "# CONFIG_KSU_SUSFS_OPEN_REDIRECT is not set" >> "$1"
             sed -i "s/CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/g" "$1"
             sed -i "s/CONFIG_CC_STACKPROTECTOR_REGULAR=y/# CONFIG_CC_STACKPROTECTOR_REGULAR is not set/g" "$1"
             echo "CONFIG_CC_STACKPROTECTOR_NONE=y" >> "$1"
           ' _ {} \;
-
-      - name: Execute Kernel Build Script
-        run: |
-          chmod -R +x scripts/ || true
-          chmod -R +x AnyKernel3/ || true
-          ./kernel_build_fixed.sh
-
-      - name: Upload Kernel Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ENGKR-YSL-KSU-SUSFS-ULTIMATE
-          path: |
-            build/Image.gz-dtb
-            *.zip
-            out/arch/arm64/boot/Image.gz-dtb
