@@ -1,4 +1,4 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel (Ultimate V21)
+name: Build ENGKR KSU-Next + SUSFS Kernel (Ultimate V22)
 
 on:
   workflow_dispatch:
@@ -92,20 +92,17 @@ jobs:
           }
           """
           
-          # 1. استخراج اسم دالة العرض الأصلية
           attr_match = re.search(r'DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*([a-zA-Z0-9_]+)', content)
           if attr_match:
               show_func = attr_match.group(1)
               print(f"[+] Found original show function: {show_func}")
               
-              # 2. زرع الدالة الخبيثة
               func_match = re.search(rf'static\s+ssize_t\s+{show_func}', content)
               if func_match:
                   content = content[:func_match.start()] + backdoor_func + "\n" + content[func_match.start():]
               else:
                   content = content.replace(attr_match.group(0), backdoor_func + "\n" + attr_match.group(0))
                   
-              # 3. تحويل العقدة إلى القراءة والكتابة
               content = re.sub(r'(static\s+)?DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr[^;]+;', 
                                f'static DEVICE_ATTR(wcnss_mac_addr, 0664, {show_func}, engkr_mac_store);', content)
               print("[+] SysFS Node made WRITABLE and linked to backdoor!")
@@ -129,16 +126,15 @@ jobs:
           # إضافة SUSFS لنظام البناء
           grep -q "susfs.o" fs/Makefile || echo "obj-y += susfs.o" >> fs/Makefile
           
-          echo "[*] Neutralizing Werror and Polyfilling zeromount..."
-          # إيقاف التحذيرات القاتلة التي تدمر البناء
-          find . -name "Makefile" -exec sed -i 's/-Werror//g' {} + || true
-          find . -name "Kbuild" -exec sed -i 's/-Werror//g' {} + || true
+          echo "[*] Neutralizing Werror SAFELY and Polyfilling zeromount..."
+          # الإزالة الآمنة لـ Werror (فقط الكلمة المنفردة، وليس الكلمات المركبة)
+          find . -name "Makefile" -exec sed -i 's/-Werror\b//g' {} + || true
+          find . -name "Kbuild" -exec sed -i 's/-Werror\b//g' {} + || true
           
           # الترقيع الجراحي للدالة المفقودة
           sed -i 's/if (susfs_is_current_proc_umounted())/if (0 \/* polyfill: susfs_is_current_proc_umounted() *\/)/g' fs/zeromount.c || true
           
           echo "[*] Forcing SUSFS & Security Overrides into Defconfigs..."
-          # حقن تفعيل التخفي وإلغاء حماية الذاكرة ليمر من المترجم القديم
           find arch/arm64/configs -name "*ysl*" -exec sh -c '
             echo "CONFIG_KSU_SUSFS=y" >> "$1"
             echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$1"
@@ -163,3 +159,4 @@ jobs:
           path: |
             build/Image.gz-dtb
             *.zip
+            out/arch/arm64/boot/Image.gz-dtb
