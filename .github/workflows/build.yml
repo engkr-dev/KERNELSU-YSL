@@ -1,4 +1,4 @@
-name: Build ENGKR KSU-Next + SUSFS Kernel (Ultimate V30)
+name: Build ENGKR KSU-Next + SUSFS Kernel (V31 - The Final Nuke)
 
 on:
   workflow_dispatch:
@@ -81,7 +81,7 @@ jobs:
           EOF
           python3 patch_mac_backdoor.py
 
-      - name: Inject Pure SUSFS Engine
+      - name: Inject Pure SUSFS Engine & Forced Headers
         run: |
           echo "[*] Injecting SUSFS Core Files..."
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
@@ -122,6 +122,62 @@ jobs:
           
           sed -i '1s/^/obj-y += susfs.o susfs_stubs.o\n/' fs/Makefile
 
+          echo "[*] Building the Universal Global Header..."
+          cat << 'EOF' > include/linux/engkr_global.h
+          #ifndef _ENGKR_GLOBAL_H
+          #define _ENGKR_GLOBAL_H
+          /* ENGKR CONSTANTS */
+          #ifndef SUSFS_MAGIC
+          #define SUSFS_MAGIC 0x53555314
+          #endif
+          #ifndef CMD_SUSFS_ADD_SUS_PATH_LOOP
+          #define CMD_SUSFS_ADD_SUS_PATH_LOOP 10
+          #endif
+          #ifndef CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS
+          #define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS 11
+          #endif
+          #ifndef CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG
+          #define CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG 12
+          #endif
+          #ifndef CMD_SUSFS_ADD_SUS_MAP
+          #define CMD_SUSFS_ADD_SUS_MAP 14
+          #endif
+          #ifndef CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING
+          #define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 15
+          #endif
+          #ifndef CMD_SUSFS_SHOW_ENABLED_FEATURES
+          #define CMD_SUSFS_SHOW_ENABLED_FEATURES 16
+          #endif
+          #ifndef CMD_SUSFS_SHOW_VARIANT
+          #define CMD_SUSFS_SHOW_VARIANT 17
+          #endif
+          #ifndef CMD_SUSFS_SHOW_VERSION
+          #define CMD_SUSFS_SHOW_VERSION 18
+          #endif
+          
+          /* KSU-NEXT SUSFS PROTOTYPES (Fixing implicit declarations) */
+          void susfs_add_sus_path_loop(void **arg);
+          void susfs_set_hide_sus_mnts_for_non_su_procs(void **arg);
+          void susfs_enable_log(void **arg);
+          void susfs_set_cmdline_or_bootconfig(void **arg);
+          void susfs_add_open_redirect(void **arg);
+          void susfs_add_sus_map(void **arg);
+          void susfs_set_avc_log_spoofing(void **arg);
+          void susfs_get_enabled_features(void **arg);
+          void susfs_show_variant(void **arg);
+          void susfs_show_version(void **arg);
+          void susfs_start_sdcard_monitor_fn(void);
+          int susfs_is_current_proc_umounted(void);
+          
+          /* TYPE CASTING MACROS (Fixing incompatible pointer types) */
+          #define susfs_add_sus_path(arg) susfs_add_sus_path((void*)(arg))
+          #define susfs_add_sus_kstat(arg) susfs_add_sus_kstat((void*)(arg))
+          #define susfs_update_sus_kstat(arg) susfs_update_sus_kstat((void*)(arg))
+          #define susfs_add_try_umount(arg) susfs_add_try_umount((void*)(arg))
+          #define susfs_set_uname(arg) susfs_set_uname((void*)(arg))
+          #endif
+          EOF
+
           echo "[*] SAFELY Neutralizing Werror via Python..."
           cat << 'EOF' > fix_werror.py
           import os, re
@@ -156,24 +212,11 @@ jobs:
 
       - name: Execute Kernel Build Script
         env:
-          # هذا هو السحر الجديد: حقن المتغيرات والدوال مباشرة في أمر المترجم نفسه!
+          # نأمر المترجم بإدراج الملف الذي صنعناه (engkr_global.h) في كل ملفات الكيرنل قسراً
+          # بدون استخدام خيارات GCC الحديثة التي لا يفهمها GCC 4.9!
           KCFLAGS: >-
-            -DSUSFS_MAGIC=0x53555314 
-            -DCMD_SUSFS_ADD_SUS_PATH_LOOP=10 
-            -DCMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS=11 
-            -DCMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG=12 
-            -DCMD_SUSFS_ADD_SUS_MAP=14 
-            -DCMD_SUSFS_ENABLE_AVC_LOG_SPOOFING=15 
-            -DCMD_SUSFS_SHOW_ENABLED_FEATURES=16 
-            -DCMD_SUSFS_SHOW_VARIANT=17 
-            -DCMD_SUSFS_SHOW_VERSION=18 
-            -DCMD_SUSFS_SUS_KSTAT=19 
-            -DCMD_SUSFS_UPDATE_SUS_KSTAT=20 
-            -DCMD_SUSFS_ADD_TRY_UMOUNT=21 
-            -DCMD_SUSFS_SET_UNAME=22 
-            -DCMD_SUSFS_ENABLE_LOG=23 
-            -Wno-error=implicit-function-declaration 
-            -Wno-error=incompatible-pointer-types
+            -include include/linux/engkr_global.h
+            -Wno-error=implicit-function-declaration
         run: |
           chmod -R +x scripts/ || true
           chmod -R +x AnyKernel3/ || true
