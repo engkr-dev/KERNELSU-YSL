@@ -1,5 +1,5 @@
 /*
- * engkr_ctl.c - Userspace CLI & JSONL streamer for engkr_tracer
+ * engkr_ctl.c - Userspace CLI & JSONL streamer for engkr_tracer (Phase 2 + Phase 3)
  * Build: aarch64-linux-gnu-gcc -static -O2 -Wall engkr_ctl.c -o engkr_ctl
  */
 
@@ -48,6 +48,13 @@ static const char *evt_type_name(uint16_t type)
 	case EVT_EXECVE:        return "EXECVE";
 	case EVT_UNAME:         return "UNAME";
 	case EVT_PTRACE:        return "PTRACE";
+	case EVT_BINDER_TX:     return "BINDER_TX";
+	case EVT_BINDER_REPLY:  return "BINDER_REPLY";
+	case EVT_IOCTL:         return "IOCTL";
+	case EVT_NETLINK:       return "NETLINK";
+	case EVT_TCP_CONNECT:   return "TCP_CONNECT";
+	case EVT_UDP_SEND:      return "UDP_SEND";
+	case EVT_UNIX_CONNECT:  return "UNIX_CONNECT";
 	default:                return "UNKNOWN";
 	}
 }
@@ -207,7 +214,7 @@ static void usage(const char *prog)
 		"  pkg <package_name>     Set target package for Auto-UID Lock & path trigger\n"
 		"  add-uid <uid>          Add target UID (up to %d)\n"
 		"  clear                  Clear target UIDs and package\n"
-		"  start [--reset]        Enable tracing (lazy-allocates 8MB ring)\n"
+		"  start [--reset]        Enable tracing (lazy-allocates 16MB ring)\n"
 		"  stop                   Disable tracing\n"
 		"  reset                  Clear ring buffer and counters\n"
 		"  marker <text>          Emit EVT_MARKER into ring buffer\n"
