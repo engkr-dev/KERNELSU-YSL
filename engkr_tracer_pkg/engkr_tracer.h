@@ -32,7 +32,7 @@ typedef int32_t s32;
 #define ENGKR_PKG_MAX		128
 #define ENGKR_COMM_MAX		16
 #define ENGKR_PATH_MAX		224
-#define ENGKR_EXTRA_MAX		112
+#define ENGKR_EXTRA_MAX		512
 #define ENGKR_MARKER_MAX	192
 
 /* Event types */
@@ -54,9 +54,20 @@ enum engkr_evt_type {
 	EVT_EXECVE		= 15,
 	EVT_UNAME		= 16,
 	EVT_PTRACE		= 17,
+	/* Phase 3 Deep Telemetry */
+	EVT_BINDER_TX		= 18,
+	EVT_BINDER_REPLY	= 19,
+	EVT_IOCTL		= 20,
+	EVT_NETLINK		= 21,
+	EVT_TCP_CONNECT		= 22,
+	EVT_UDP_SEND		= 23,
+	EVT_UNIX_CONNECT	= 24,
 };
 
-/* Fixed-size 384-byte binary event record (8-byte aligned, no padding holes) */
+/*
+ * Fixed-size 784-byte binary event record (8-byte aligned, zero padding holes):
+ * 8 + 4 + 4 + 4 + 2 + 2 + 4 + 4 + 16 + 224 + 512 = 784 bytes
+ */
 struct engkr_event {
 	u64 ts_ns;
 	u32 pid;
@@ -88,6 +99,9 @@ struct engkr_stats {
 struct file;
 struct path;
 struct dentry;
+struct task_struct;
+struct sockaddr;
+struct in6_addr;
 
 extern atomic_t engkr_tracer_active;
 
@@ -96,11 +110,13 @@ static inline bool engkr_tracer_is_active(void)
 	return unlikely(atomic_read(&engkr_tracer_active) != 0);
 }
 
+bool engkr_is_current_uid_tracked(void);
+
 /* Control interface (always callable even when inactive) */
 bool engkr_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 			unsigned long arg4, unsigned long arg5, long *ret);
 
-/* Out-of-line hook implementations */
+/* Phase 2 out-of-line hook implementations */
 void __engkr_trace_chown(const struct path *path, uid_t user, int error);
 void __engkr_trace_open_ok(struct file *f, int flags, int fd);
 void __engkr_trace_open_err(const char *name, int flags, int err);
@@ -121,7 +137,21 @@ void __engkr_trace_execve(const char *filename, const char *argv_str);
 void __engkr_trace_uname(void);
 void __engkr_trace_ptrace(long request, long pid);
 
-/* Single-instruction fast-path inline wrappers */
+/* Phase 3 out-of-line hook implementations */
+void __engkr_trace_binder(int reply, struct task_struct *peer_tsk, u32 code,
+			  u32 bflags, const void __user *ubuf,
+			  size_t data_size);
+void __engkr_trace_ioctl(struct file *filp, unsigned int cmd,
+			 unsigned long arg, bool is_compat);
+void __engkr_trace_netlink(int protocol, u16 nlmsg_type, u16 nlmsg_flags,
+			   size_t len);
+void __engkr_trace_tcp_connect(const struct sockaddr *uaddr, int addr_len);
+void __engkr_trace_udp4_send(__be32 daddr, __be16 dport, size_t len);
+void __engkr_trace_udp6_send(const struct in6_addr *daddr, __be16 dport,
+			     size_t len);
+void __engkr_trace_unix_connect(const struct sockaddr *uaddr, int addr_len);
+
+/* Single-instruction fast-path inline wrappers (Phase 2) */
 static inline void engkr_trace_chown(const struct path *path, uid_t user, int error)
 {
 	if (likely(!atomic_read(&engkr_tracer_active)))
@@ -243,6 +273,65 @@ static inline void engkr_trace_ptrace(long request, long pid)
 	if (likely(!atomic_read(&engkr_tracer_active)))
 		return;
 	__engkr_trace_ptrace(request, pid);
+}
+
+/* Single-instruction fast-path inline wrappers (Phase 3) */
+static inline void engkr_trace_binder(int reply, struct task_struct *peer_tsk,
+				      u32 code, u32 bflags,
+				      const void __user *ubuf,
+				      size_t data_size)
+{
+	if (likely(!atomic_read(&engkr_tracer_active)))
+		return;
+	__engkr_trace_binder(reply, peer_tsk, code, bflags, ubuf, data_size);
+}
+
+static inline void engkr_trace_ioctl(struct file *filp, unsigned int cmd,
+				     unsigned long arg, bool is_compat)
+{
+	if (likely(!atomic_read(&engkr_tracer_active)))
+		return;
+	__engkr_trace_ioctl(filp, cmd, arg, is_compat);
+}
+
+static inline void engkr_trace_netlink(int protocol, u16 nlmsg_type,
+				       u16 nlmsg_flags, size_t len)
+{
+	if (likely(!atomic_read(&engkr_tracer_active)))
+		return;
+	__engkr_trace_netlink(protocol, nlmsg_type, nlmsg_flags, len);
+}
+
+static inline void engkr_trace_tcp_connect(const struct sockaddr *uaddr,
+					   int addr_len)
+{
+	if (likely(!atomic_read(&engkr_tracer_active)))
+		return;
+	__engkr_trace_tcp_connect(uaddr, addr_len);
+}
+
+static inline void engkr_trace_udp4_send(__be32 daddr, __be16 dport,
+					 size_t len)
+{
+	if (likely(!atomic_read(&engkr_tracer_active)))
+		return;
+	__engkr_trace_udp4_send(daddr, dport, len);
+}
+
+static inline void engkr_trace_udp6_send(const struct in6_addr *daddr,
+					 __be16 dport, size_t len)
+{
+	if (likely(!atomic_read(&engkr_tracer_active)))
+		return;
+	__engkr_trace_udp6_send(daddr, dport, len);
+}
+
+static inline void engkr_trace_unix_connect(const struct sockaddr *uaddr,
+					    int addr_len)
+{
+	if (likely(!atomic_read(&engkr_tracer_active)))
+		return;
+	__engkr_trace_unix_connect(uaddr, addr_len);
 }
 
 #endif /* __KERNEL__ */
