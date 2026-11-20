@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * engkr_tracer - Phase 2 Core Engine + VFS/Xattr/MMAP/Exec/Env Hooks
+ * engkr_tracer - Phase 2 + Phase 3 Full Deep Telemetry Engine
  * Target: Android Linux 4.9.262 (Xiaomi Redmi S2 / ysl)
  */
 
@@ -19,14 +19,19 @@
 #include <linux/dcache.h>
 #include <linux/path.h>
 #include <linux/string.h>
+#include <linux/socket.h>
+#include <linux/in.h>
+#include <linux/in6.h>
+#include <linux/un.h>
 #include <linux/engkr_tracer.h>
 
-/* 8 MiB ring buffer rounded down to an integer multiple of struct engkr_event */
-#define ENGKR_RING_TARGET_BYTES	(8U * 1024U * 1024U)
+/* 16 MiB ring buffer rounded down to an integer multiple of struct engkr_event */
+#define ENGKR_RING_TARGET_BYTES	(16U * 1024U * 1024U)
 #define ENGKR_RING_CAPACITY	(ENGKR_RING_TARGET_BYTES / sizeof(struct engkr_event))
 #define ENGKR_RING_SIZE_BYTES	(ENGKR_RING_CAPACITY * sizeof(struct engkr_event))
 #define ENGKR_PATH_BUF_SZ	512
-#define ENGKR_READ_CHUNK_EVTS	32
+#define ENGKR_BINDER_CAPTURE_SZ	512
+#define ENGKR_READ_CHUNK_EVTS	8
 
 atomic_t engkr_tracer_active = ATOMIC_INIT(0);
 EXPORT_SYMBOL(engkr_tracer_active);
@@ -66,6 +71,14 @@ static bool engkr_uid_matches(u32 uid)
 	spin_unlock_irqrestore(&engkr_ring_lock, flags);
 	return match;
 }
+
+bool engkr_is_current_uid_tracked(void)
+{
+	if (likely(!atomic_read(&engkr_tracer_active)))
+		return false;
+	return engkr_uid_matches(current_uid().val);
+}
+EXPORT_SYMBOL(engkr_is_current_uid_tracked);
 
 static bool engkr_has_target_pkg(void)
 {
@@ -150,6 +163,76 @@ static char *engkr_resolve_path(const struct path *path, char *buf, int buflen)
 	if (IS_ERR(p))
 		return NULL;
 	return p;
+}
+
+static inline bool engkr_is_printable(unsigned char c)
+{
+	return (c >= 0x20 && c <= 0x7E);
+}
+
+/*
+ * Parse Android Binder Parcel bytes (UTF-16LE + ASCII runs >= 3 chars)
+ * into ev->extra, prefixed with raw parcel size.
+ */
+static void engkr_parse_binder_parcel(char *out, size_t out_sz,
+				      const unsigned char *buf,
+				      size_t copy_len, size_t total_len)
+{
+	size_t pos;
+	size_t i = 0;
+
+	pos = (size_t)scnprintf(out, out_sz, "sz=%zu", total_len);
+	if (!buf || copy_len == 0)
+		return;
+
+	while (i < copy_len && pos + 6 < out_sz) {
+		/* Check UTF-16LE printable ASCII run (>= 3 chars) */
+		if (i + 5 < copy_len &&
+		    engkr_is_printable(buf[i]) && buf[i + 1] == 0x00) {
+			size_t j = i;
+			size_t chars = 0;
+
+			while (j + 1 < copy_len &&
+			       engkr_is_printable(buf[j]) &&
+			       buf[j + 1] == 0x00) {
+				chars++;
+				j += 2;
+			}
+			if (chars >= 3) {
+				size_t k;
+
+				pos += (size_t)scnprintf(out + pos,
+							 out_sz - pos, " | ");
+				for (k = i; k < j && pos + 1 < out_sz; k += 2)
+					out[pos++] = (char)buf[k];
+				out[pos] = '\0';
+				i = j;
+				continue;
+			}
+		}
+
+		/* Check raw ASCII printable run (>= 3 chars) */
+		if (engkr_is_printable(buf[i])) {
+			size_t j = i;
+
+			while (j < copy_len && engkr_is_printable(buf[j]))
+				j++;
+			if (j - i >= 3) {
+				size_t k;
+
+				pos += (size_t)scnprintf(out + pos,
+							 out_sz - pos, " | ");
+				for (k = i; k < j && pos + 1 < out_sz; k++)
+					out[pos++] = (char)buf[k];
+				out[pos] = '\0';
+				i = j;
+				continue;
+			}
+			i = j;
+			continue;
+		}
+		i++;
+	}
 }
 
 /* ==================== Control Plane (prctl) ==================== */
@@ -381,7 +464,7 @@ bool engkr_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 }
 EXPORT_SYMBOL(engkr_handle_prctl);
 
-/* ==================== Auto-UID Lock & VFS Hooks ==================== */
+/* ==================== Phase 2: Auto-UID Lock & VFS Hooks ==================== */
 
 void __engkr_trace_chown(const struct path *path, uid_t user, int error)
 {
@@ -745,7 +828,7 @@ void __engkr_trace_xattr(bool is_set, struct dentry *d, const char *kname,
 			for (i = 0; i < lim; i++) {
 				unsigned char c = bytes[i];
 
-				ev->extra[pos++] = (c >= 32 && c < 127) ?
+				ev->extra[pos++] = engkr_is_printable(c) ?
 						   (char)c : '.';
 			}
 			ev->extra[pos] = '\0';
@@ -832,3 +915,261 @@ void __engkr_trace_ptrace(long request, long pid)
 		kfree(ev);
 	}
 }
+
+/* ==================== Phase 3: Binder, IOCTL, Netlink, Sockets ==================== */
+
+void __engkr_trace_binder(int reply, struct task_struct *peer_tsk, u32 code,
+			  u32 bflags, const void __user *ubuf,
+			  size_t data_size)
+{
+	struct engkr_event *ev;
+	unsigned char *kbuf = NULL;
+	char peer_comm[TASK_COMM_LEN];
+	size_t copy_len = 0;
+
+	if (!reply) {
+		if (!engkr_uid_matches(current_uid().val))
+			return;
+	} else {
+		if (!peer_tsk || !engkr_uid_matches(task_uid(peer_tsk).val))
+			return;
+	}
+
+	ev = kmalloc(sizeof(*ev), GFP_KERNEL);
+	if (!ev)
+		return;
+
+	if (ubuf && data_size > 0) {
+		copy_len = (data_size > ENGKR_BINDER_CAPTURE_SZ) ?
+			   ENGKR_BINDER_CAPTURE_SZ : data_size;
+		kbuf = kmalloc(copy_len, GFP_KERNEL);
+		if (kbuf) {
+			if (copy_from_user(kbuf, ubuf, copy_len)) {
+				kfree(kbuf);
+				kbuf = NULL;
+				copy_len = 0;
+			}
+		} else {
+			copy_len = 0;
+		}
+	}
+
+	engkr_init_event(ev, reply ? EVT_BINDER_REPLY : EVT_BINDER_TX,
+			 (u16)(bflags & 0xFFFF), (s32)data_size, (s32)code);
+
+	if (peer_tsk) {
+		get_task_comm(peer_comm, peer_tsk);
+		snprintf(ev->path, sizeof(ev->path), "peer=%s pid=%d uid=%u",
+			 peer_comm, peer_tsk->tgid, task_uid(peer_tsk).val);
+	} else {
+		strlcpy(ev->path, "peer=unknown", sizeof(ev->path));
+	}
+
+	engkr_parse_binder_parcel(ev->extra, sizeof(ev->extra),
+				  kbuf, copy_len, data_size);
+
+	engkr_ring_push(ev);
+	kfree(kbuf);
+	kfree(ev);
+}
+EXPORT_SYMBOL(__engkr_trace_binder);
+
+static bool engkr_ioctl_is_spam(const char *path)
+{
+	if (!path)
+		return false;
+	if (strcmp(path, "/dev/binder") == 0 ||
+	    strcmp(path, "/dev/hwbinder") == 0 ||
+	    strcmp(path, "/dev/vndbinder") == 0 ||
+	    strcmp(path, "/dev/kgsl-3d0") == 0 ||
+	    strncmp(path, "/dev/ashmem", 11) == 0)
+		return true;
+	return false;
+}
+
+void __engkr_trace_ioctl(struct file *filp, unsigned int cmd,
+			 unsigned long arg, bool is_compat)
+{
+	char *pbuf;
+	char *fullpath;
+	struct engkr_event *ev;
+
+	if (!filp || !engkr_uid_matches(current_uid().val))
+		return;
+
+	pbuf = kmalloc(ENGKR_PATH_BUF_SZ, GFP_KERNEL);
+	if (!pbuf)
+		return;
+
+	fullpath = engkr_resolve_path(&filp->f_path, pbuf, ENGKR_PATH_BUF_SZ);
+	if (fullpath && engkr_ioctl_is_spam(fullpath)) {
+		kfree(pbuf);
+		return;
+	}
+
+	ev = kmalloc(sizeof(*ev), GFP_KERNEL);
+	if (ev) {
+		engkr_init_event(ev, EVT_IOCTL, is_compat ? 1 : 0, 0, (s32)cmd);
+		if (fullpath)
+			strlcpy(ev->path, fullpath, sizeof(ev->path));
+		else
+			strlcpy(ev->path, "(unknown)", sizeof(ev->path));
+		snprintf(ev->extra, sizeof(ev->extra), "cmd=0x%08x arg=0x%lx",
+			 cmd, arg);
+		engkr_ring_push(ev);
+		kfree(ev);
+	}
+	kfree(pbuf);
+}
+EXPORT_SYMBOL(__engkr_trace_ioctl);
+
+void __engkr_trace_netlink(int protocol, u16 nlmsg_type, u16 nlmsg_flags,
+			   size_t len)
+{
+	struct engkr_event *ev;
+
+	if (!engkr_uid_matches(current_uid().val))
+		return;
+
+	ev = kmalloc(sizeof(*ev), GFP_KERNEL);
+	if (ev) {
+		engkr_init_event(ev, EVT_NETLINK, nlmsg_type,
+				 (s32)len, (s32)protocol);
+		snprintf(ev->path, sizeof(ev->path), "proto=%d type=%u",
+			 protocol, (unsigned int)nlmsg_type);
+		snprintf(ev->extra, sizeof(ev->extra), "nlmsg_flags=0x%04x",
+			 (unsigned int)nlmsg_flags);
+		engkr_ring_push(ev);
+		kfree(ev);
+	}
+}
+EXPORT_SYMBOL(__engkr_trace_netlink);
+
+void __engkr_trace_tcp_connect(const struct sockaddr *uaddr, int addr_len)
+{
+	struct engkr_event *ev;
+
+	if (!uaddr || addr_len < (int)sizeof(uaddr->sa_family))
+		return;
+	if (!engkr_uid_matches(current_uid().val))
+		return;
+
+	ev = kmalloc(sizeof(*ev), GFP_KERNEL);
+	if (!ev)
+		return;
+
+	if (uaddr->sa_family == AF_INET &&
+	    addr_len >= (int)sizeof(struct sockaddr_in)) {
+		const struct sockaddr_in *sin =
+			(const struct sockaddr_in *)uaddr;
+		u16 port = ntohs(sin->sin_port);
+
+		engkr_init_event(ev, EVT_TCP_CONNECT, AF_INET, 0, (s32)port);
+		snprintf(ev->path, sizeof(ev->path), "ipv4:%pI4:%u",
+			 &sin->sin_addr.s_addr, (unsigned int)port);
+		engkr_ring_push(ev);
+	} else if (uaddr->sa_family == AF_INET6 &&
+		   addr_len >= (int)sizeof(struct sockaddr_in6)) {
+		const struct sockaddr_in6 *sin6 =
+			(const struct sockaddr_in6 *)uaddr;
+		u16 port = ntohs(sin6->sin6_port);
+
+		engkr_init_event(ev, EVT_TCP_CONNECT, AF_INET6, 0, (s32)port);
+		snprintf(ev->path, sizeof(ev->path), "ipv6:[%pI6c]:%u",
+			 &sin6->sin6_addr, (unsigned int)port);
+		engkr_ring_push(ev);
+	}
+
+	kfree(ev);
+}
+EXPORT_SYMBOL(__engkr_trace_tcp_connect);
+
+void __engkr_trace_udp4_send(__be32 daddr, __be16 dport, size_t len)
+{
+	struct engkr_event *ev;
+	u16 port;
+
+	if (!engkr_uid_matches(current_uid().val))
+		return;
+
+	ev = kmalloc(sizeof(*ev), GFP_KERNEL);
+	if (!ev)
+		return;
+
+	port = ntohs(dport);
+	engkr_init_event(ev, EVT_UDP_SEND, AF_INET, (s32)len, (s32)port);
+	snprintf(ev->path, sizeof(ev->path), "udp4:%pI4:%u",
+		 &daddr, (unsigned int)port);
+	engkr_ring_push(ev);
+	kfree(ev);
+}
+EXPORT_SYMBOL(__engkr_trace_udp4_send);
+
+void __engkr_trace_udp6_send(const struct in6_addr *daddr, __be16 dport,
+			     size_t len)
+{
+	struct engkr_event *ev;
+	u16 port;
+
+	if (!daddr || !engkr_uid_matches(current_uid().val))
+		return;
+
+	ev = kmalloc(sizeof(*ev), GFP_KERNEL);
+	if (!ev)
+		return;
+
+	port = ntohs(dport);
+	engkr_init_event(ev, EVT_UDP_SEND, AF_INET6, (s32)len, (s32)port);
+	snprintf(ev->path, sizeof(ev->path), "udp6:[%pI6c]:%u",
+		 daddr, (unsigned int)port);
+	engkr_ring_push(ev);
+	kfree(ev);
+}
+EXPORT_SYMBOL(__engkr_trace_udp6_send);
+
+void __engkr_trace_unix_connect(const struct sockaddr *uaddr, int addr_len)
+{
+	const struct sockaddr_un *sunaddr;
+	struct engkr_event *ev;
+	int path_len;
+	int i, pos;
+
+	if (!uaddr || addr_len <= (int)offsetof(struct sockaddr_un, sun_path))
+		return;
+	if (!engkr_uid_matches(current_uid().val))
+		return;
+
+	sunaddr = (const struct sockaddr_un *)uaddr;
+	path_len = addr_len - (int)offsetof(struct sockaddr_un, sun_path);
+	if (path_len > (int)sizeof(sunaddr->sun_path))
+		path_len = (int)sizeof(sunaddr->sun_path);
+
+	ev = kmalloc(sizeof(*ev), GFP_KERNEL);
+	if (!ev)
+		return;
+
+	engkr_init_event(ev, EVT_UNIX_CONNECT, AF_UNIX, 0, path_len);
+	if (sunaddr->sun_path[0] == '\0') {
+		/* Linux abstract namespace socket */
+		pos = 0;
+		ev->path[pos++] = '@';
+		for (i = 1; i < path_len && pos < (int)sizeof(ev->path) - 1; i++) {
+			unsigned char c = (unsigned char)sunaddr->sun_path[i];
+
+			if (c == '\0')
+				break;
+			ev->path[pos++] = engkr_is_printable(c) ? (char)c : '.';
+		}
+		ev->path[pos] = '\0';
+	} else {
+		int copy_n = (path_len < (int)sizeof(ev->path) - 1) ?
+			     path_len : (int)sizeof(ev->path) - 1;
+
+		memcpy(ev->path, sunaddr->sun_path, copy_n);
+		ev->path[copy_n] = '\0';
+	}
+
+	engkr_ring_push(ev);
+	kfree(ev);
+}
+EXPORT_SYMBOL(__engkr_trace_unix_connect);
