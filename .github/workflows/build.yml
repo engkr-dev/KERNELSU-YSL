@@ -77,7 +77,6 @@ jobs:
               if (sscanf(buf, "%x:%x:%x:%x:%x:%x",
                   &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) == 6) {
                   
-                  // مسح الماك الحقيقي وكتابة الماك المزيف مباشرة في قلب المودم!
                   penv->wlan_nv_mac_addr[0] = (char)mac[0];
                   penv->wlan_nv_mac_addr[1] = (char)mac[1];
                   penv->wlan_nv_mac_addr[2] = (char)mac[2];
@@ -91,21 +90,17 @@ jobs:
           }
           """
           
-          # 1. استخراج اسم دالة العرض (show) الأصلية أياً كان اسمها
           attr_match = re.search(r'DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr\s*,\s*[^,]+\s*,\s*([a-zA-Z0-9_]+)', content)
           if attr_match:
               show_func = attr_match.group(1)
               print(f"[+] Found original show function: {show_func}")
               
-              # 2. زرع الدالة الخبيثة قبل دالة العرض مباشرة لتجنب خطأ (undeclared)
               func_match = re.search(rf'static\s+ssize_t\s+{show_func}', content)
               if func_match:
                   content = content[:func_match.start()] + backdoor_func + "\n" + content[func_match.start():]
               else:
-                  # خطة بديلة للزرع
                   content = content.replace(attr_match.group(0), backdoor_func + "\n" + attr_match.group(0))
                   
-              # 3. تحويل العقدة إلى وضع القراءة والكتابة (RW)
               content = re.sub(r'(static\s+)?DEVICE_ATTR(?:_RO)?\s*\(\s*wcnss_mac_addr[^;]+;', 
                                f'static DEVICE_ATTR(wcnss_mac_addr, 0664, {show_func}, engkr_mac_store);', content)
               print("[+] SysFS Node made WRITABLE and linked to backdoor!")
@@ -119,11 +114,27 @@ jobs:
           EOF
           python3 patch_mac_backdoor.py
 
+      - name: Inject engkr_tracer Phase 2 Hooks
+        run: |
+          python3 engkr_tracer_pkg/patch_engkr_tracer.py --kernel-dir .
+
       - name: Execute Kernel Build Script
         run: |
           chmod -R +x scripts/ || true
           chmod -R +x AnyKernel3/ || true
           ./kernel_build_fixed.sh
+
+      - name: Build Static ARM64 engkr_ctl
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p build
+          aarch64-linux-gnu-gcc -static -O2 -Wall \
+            -I engkr_tracer_pkg \
+            engkr_tracer_pkg/engkr_ctl.c \
+            -o build/engkr_ctl
+          chmod +x build/engkr_ctl
 
       - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
@@ -131,4 +142,5 @@ jobs:
           name: ENGKR-YSL-KSU-SUSFS-Kernel
           path: |
             build/Image.gz-dtb
+            build/engkr_ctl
             *.zip
