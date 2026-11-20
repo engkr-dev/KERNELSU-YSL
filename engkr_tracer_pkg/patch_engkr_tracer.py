@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-patch_engkr_tracer.py - Idempotent, fail-fast Phase 2 kernel injector for engkr_tracer
+patch_engkr_tracer.py - Idempotent, fail-fast Phase 2 + Phase 3 kernel injector
 Target: Android Linux 4.9.262 (Xiaomi Redmi S2 / ysl) with KSU-Next + SUSFS + ZeroMount
 """
 
@@ -26,7 +26,6 @@ def ensure_include(content, rel_path):
     inc = "#include <linux/engkr_tracer.h>"
     if inc in content:
         return content, False
-    # Insert right after the first #include line
     lines = content.splitlines(keepends=True)
     for idx, line in enumerate(lines):
         if line.startswith("#include "):
@@ -76,7 +75,9 @@ def patch_file(kernel_dir, rel_path, patches, dry_run, add_include=True):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Inject engkr_tracer Phase 2 hooks")
+    parser = argparse.ArgumentParser(
+        description="Inject engkr_tracer Phase 2 + Phase 3 hooks"
+    )
     parser.add_argument(
         "--kernel-dir",
         default=".",
@@ -104,13 +105,15 @@ def main():
 
     if args.dry_run:
         print(f"[*] DRY-RUN mode against kernel tree: {kernel_dir}")
-        print(f"[+] Would copy engkr_tracer.h -> include/linux/engkr_tracer.h")
-        print(f"[+] Would copy engkr_tracer.c -> drivers/misc/engkr_tracer.c")
+        print("[+] Would copy engkr_tracer.h -> include/linux/engkr_tracer.h")
+        print("[+] Would copy engkr_tracer.c -> drivers/misc/engkr_tracer.c")
     else:
         shutil.copy2(hdr_src, hdr_dst)
         shutil.copy2(src_src, src_dst)
-        print(f"[+] Copied engkr_tracer.h -> include/linux/engkr_tracer.h")
-        print(f"[+] Copied engkr_tracer.c -> drivers/misc/engkr_tracer.c")
+        print("[+] Copied engkr_tracer.h -> include/linux/engkr_tracer.h")
+        print("[+] Copied engkr_tracer.c -> drivers/misc/engkr_tracer.c")
+
+    # ==================== PHASE 2 ANCHORS ====================
 
     # 1. drivers/misc/Makefile
     mk_path = os.path.join(kernel_dir, "drivers", "misc", "Makefile")
@@ -430,7 +433,7 @@ def main():
         args.dry_run,
     )
 
-    # 10. fs/exec.c (helper for struct user_arg_ptr + do_execveat_common)
+    # 10. fs/exec.c (fast-path UID check + helper for struct user_arg_ptr + do_execveat_common)
     exec_helper = (
         "static noinline void engkr_execve_helper(const char *filename,\n"
         "\t\t\t\t\t struct user_arg_ptr argv)\n"
@@ -439,18 +442,18 @@ def main():
         "\tchar *tmp;\n"
         "\tint i, pos = 0;\n"
         "\n"
-        "\tif (!engkr_tracer_is_active())\n"
+        "\tif (!engkr_is_current_uid_tracked())\n"
         "\t\treturn;\n"
         "\tabuf = kzalloc(ENGKR_EXTRA_MAX, GFP_KERNEL);\n"
-        "\ttmp = kmalloc(64, GFP_KERNEL);\n"
+        "\ttmp = kmalloc(128, GFP_KERNEL);\n"
         "\tif (abuf && tmp) {\n"
-        "\t\tfor (i = 0; i < 4 && pos < ENGKR_EXTRA_MAX - 2; i++) {\n"
+        "\t\tfor (i = 0; i < 8 && pos < ENGKR_EXTRA_MAX - 2; i++) {\n"
         "\t\t\tconst char __user *p = get_user_arg_ptr(argv, i);\n"
         "\t\t\tlong n;\n"
         "\n"
         "\t\t\tif (!p || IS_ERR(p))\n"
         "\t\t\t\tbreak;\n"
-        "\t\t\tn = strncpy_from_user(tmp, p, 63);\n"
+        "\t\t\tn = strncpy_from_user(tmp, p, 127);\n"
         "\t\t\tif (n <= 0)\n"
         "\t\t\t\tbreak;\n"
         "\t\t\ttmp[n] = '\\0';\n"
@@ -469,7 +472,8 @@ def main():
         [
             (
                 "static int do_execveat_common(int fd, struct filename *filename,\n",
-                exec_helper + "static int do_execveat_common(int fd, struct filename *filename,\n",
+                exec_helper
+                + "static int do_execveat_common(int fd, struct filename *filename,\n",
                 "engkr_execve_helper(",
                 "execve_helper",
             ),
@@ -527,8 +531,231 @@ def main():
         args.dry_run,
     )
 
+    # ==================== PHASE 3 ANCHORS ====================
+
+    # 12. drivers/android/binder.c (binder_transaction TX + REPLY)
+    patch_file(
+        kernel_dir,
+        "drivers/android/binder.c",
+        [
+            (
+                "\tif (binder_alloc_copy_user_to_buffer(\n"
+                "\t\t\t\t&target_proc->alloc,\n"
+                "\t\t\t\tt->buffer, 0,\n"
+                "\t\t\t\t(const void __user *)\n"
+                "\t\t\t\t\t(uintptr_t)tr->data.ptr.buffer,\n"
+                "\t\t\t\ttr->data_size)) {\n"
+                "\t\tbinder_user_error(\"%d:%d got transaction with invalid data ptr\\n\",\n"
+                "\t\t\t\tproc->pid, thread->pid);\n"
+                "\t\treturn_error = BR_FAILED_REPLY;\n"
+                "\t\treturn_error_param = -EFAULT;\n"
+                "\t\treturn_error_line = __LINE__;\n"
+                "\t\tgoto err_copy_data_failed;\n"
+                "\t}\n",
+                "\tif (binder_alloc_copy_user_to_buffer(\n"
+                "\t\t\t\t&target_proc->alloc,\n"
+                "\t\t\t\tt->buffer, 0,\n"
+                "\t\t\t\t(const void __user *)\n"
+                "\t\t\t\t\t(uintptr_t)tr->data.ptr.buffer,\n"
+                "\t\t\t\ttr->data_size)) {\n"
+                "\t\tbinder_user_error(\"%d:%d got transaction with invalid data ptr\\n\",\n"
+                "\t\t\t\tproc->pid, thread->pid);\n"
+                "\t\treturn_error = BR_FAILED_REPLY;\n"
+                "\t\treturn_error_param = -EFAULT;\n"
+                "\t\treturn_error_line = __LINE__;\n"
+                "\t\tgoto err_copy_data_failed;\n"
+                "\t}\n"
+                "\tengkr_trace_binder(reply, target_proc ? target_proc->tsk : NULL,\n"
+                "\t\t\t   tr->code, tr->flags,\n"
+                "\t\t\t   (const void __user *)(uintptr_t)tr->data.ptr.buffer,\n"
+                "\t\t\t   tr->data_size);\n",
+                "engkr_trace_binder(",
+                "binder_transaction",
+            ),
+        ],
+        args.dry_run,
+    )
+
+    # 13. fs/ioctl.c (native 64-bit sys_ioctl; no double-log with compat)
+    patch_file(
+        kernel_dir,
+        "fs/ioctl.c",
+        [
+            (
+                "\terror = security_file_ioctl(f.file, cmd, arg);\n"
+                "\tif (!error)\n"
+                "\t\terror = do_vfs_ioctl(f.file, fd, cmd, arg);\n",
+                "\terror = security_file_ioctl(f.file, cmd, arg);\n"
+                "\tif (!error) {\n"
+                "\t\tengkr_trace_ioctl(f.file, cmd, arg, false);\n"
+                "\t\terror = do_vfs_ioctl(f.file, fd, cmd, arg);\n"
+                "\t}\n",
+                "engkr_trace_ioctl(",
+                "sys_ioctl",
+            ),
+        ],
+        args.dry_run,
+    )
+
+    # 14. fs/compat_ioctl.c (32-bit compat_sys_ioctl)
+    patch_file(
+        kernel_dir,
+        "fs/compat_ioctl.c",
+        [
+            (
+                "\terror = security_file_ioctl(f.file, cmd, arg);\n"
+                "\tif (error)\n"
+                "\t\tgoto out_fput;\n",
+                "\terror = security_file_ioctl(f.file, cmd, arg);\n"
+                "\tif (error)\n"
+                "\t\tgoto out_fput;\n"
+                "\tengkr_trace_ioctl(f.file, cmd, arg, true);\n",
+                "engkr_trace_ioctl(",
+                "compat_sys_ioctl",
+            ),
+        ],
+        args.dry_run,
+    )
+
+    # 15. net/netlink/af_netlink.c (netlink_sendmsg after memcpy_from_msg)
+    patch_file(
+        kernel_dir,
+        "net/netlink/af_netlink.c",
+        [
+            (
+                "\tif (memcpy_from_msg(skb_put(skb, len), msg, len)) {\n"
+                "\t\tkfree_skb(skb);\n"
+                "\t\tgoto out;\n"
+                "\t}\n",
+                "\tif (memcpy_from_msg(skb_put(skb, len), msg, len)) {\n"
+                "\t\tkfree_skb(skb);\n"
+                "\t\tgoto out;\n"
+                "\t}\n"
+                "\tif (engkr_tracer_is_active() && skb->len >= sizeof(struct nlmsghdr))\n"
+                "\t\tengkr_trace_netlink(sk->sk_protocol,\n"
+                "\t\t\t\t    nlmsg_hdr(skb)->nlmsg_type,\n"
+                "\t\t\t\t    nlmsg_hdr(skb)->nlmsg_flags, len);\n",
+                "engkr_trace_netlink(",
+                "netlink_sendmsg",
+            ),
+        ],
+        args.dry_run,
+    )
+
+    # 16. net/ipv4/af_inet.c (__inet_stream_connect -> covers IPv4 & IPv6 TCP)
+    patch_file(
+        kernel_dir,
+        "net/ipv4/af_inet.c",
+        [
+            (
+                "\t\tif (uaddr->sa_family == AF_UNSPEC) {\n"
+                "\t\t\terr = sk->sk_prot->disconnect(sk, flags);\n"
+                "\t\t\tsock->state = err ? SS_DISCONNECTING : SS_UNCONNECTED;\n"
+                "\t\t\tgoto out;\n"
+                "\t\t}\n"
+                "\t}\n",
+                "\t\tif (uaddr->sa_family == AF_UNSPEC) {\n"
+                "\t\t\terr = sk->sk_prot->disconnect(sk, flags);\n"
+                "\t\t\tsock->state = err ? SS_DISCONNECTING : SS_UNCONNECTED;\n"
+                "\t\t\tgoto out;\n"
+                "\t\t}\n"
+                "\t\tengkr_trace_tcp_connect(uaddr, addr_len);\n"
+                "\t}\n",
+                "engkr_trace_tcp_connect(",
+                "__inet_stream_connect",
+            ),
+        ],
+        args.dry_run,
+    )
+
+    # 17. net/ipv4/udp.c (udp_sendmsg)
+    patch_file(
+        kernel_dir,
+        "net/ipv4/udp.c",
+        [
+            (
+                "\t\tdaddr = inet->inet_daddr;\n"
+                "\t\tdport = inet->inet_dport;\n"
+                "\t\t/* Open fast path for connected socket.\n"
+                "\t\t   Route will not be used, if at least one option is set.\n"
+                "\t\t */\n"
+                "\t\tconnected = 1;\n"
+                "\t}\n",
+                "\t\tdaddr = inet->inet_daddr;\n"
+                "\t\tdport = inet->inet_dport;\n"
+                "\t\t/* Open fast path for connected socket.\n"
+                "\t\t   Route will not be used, if at least one option is set.\n"
+                "\t\t */\n"
+                "\t\tconnected = 1;\n"
+                "\t}\n"
+                "\tengkr_trace_udp4_send(daddr, dport, len);\n",
+                "engkr_trace_udp4_send(",
+                "udp_sendmsg",
+            ),
+        ],
+        args.dry_run,
+    )
+
+    # 18. net/ipv6/udp.c (udpv6_sendmsg pure IPv6 path)
+    patch_file(
+        kernel_dir,
+        "net/ipv6/udp.c",
+        [
+            (
+                "\t\tfl6.fl6_dport = inet->inet_dport;\n"
+                "\t\tdaddr = &sk->sk_v6_daddr;\n"
+                "\t\tfl6.flowlabel = np->flow_label;\n"
+                "\t\tconnected = 1;\n"
+                "\t}\n",
+                "\t\tfl6.fl6_dport = inet->inet_dport;\n"
+                "\t\tdaddr = &sk->sk_v6_daddr;\n"
+                "\t\tfl6.flowlabel = np->flow_label;\n"
+                "\t\tconnected = 1;\n"
+                "\t}\n"
+                "\tengkr_trace_udp6_send(daddr, fl6.fl6_dport, len);\n",
+                "engkr_trace_udp6_send(",
+                "udpv6_sendmsg",
+            ),
+        ],
+        args.dry_run,
+    )
+
+    # 19. net/unix/af_unix.c (unix_stream_connect)
+    patch_file(
+        kernel_dir,
+        "net/unix/af_unix.c",
+        [
+            (
+                "\terr = unix_mkname(sunaddr, addr_len, &hash);\n"
+                "\tif (err < 0)\n"
+                "\t\tgoto out;\n"
+                "\taddr_len = err;\n"
+                "\n"
+                "\tif (test_bit(SOCK_PASSCRED, &sock->flags) && !u->addr &&\n"
+                "\t    (err = unix_autobind(sock)) != 0)\n"
+                "\t\tgoto out;\n"
+                "\n"
+                "\ttimeo = sock_sndtimeo(sk, flags & O_NONBLOCK);\n",
+                "\terr = unix_mkname(sunaddr, addr_len, &hash);\n"
+                "\tif (err < 0)\n"
+                "\t\tgoto out;\n"
+                "\taddr_len = err;\n"
+                "\tengkr_trace_unix_connect(uaddr, addr_len);\n"
+                "\n"
+                "\tif (test_bit(SOCK_PASSCRED, &sock->flags) && !u->addr &&\n"
+                "\t    (err = unix_autobind(sock)) != 0)\n"
+                "\t\tgoto out;\n"
+                "\n"
+                "\ttimeo = sock_sndtimeo(sk, flags & O_NONBLOCK);\n",
+                "engkr_trace_unix_connect(",
+                "unix_stream_connect",
+            ),
+        ],
+        args.dry_run,
+    )
+
     mode = "DRY-RUN PASSED" if args.dry_run else "PATCHING COMPLETE"
-    print(f"\n[OK] engkr_tracer Phase 2 {mode}: all anchors verified.")
+    print(f"\n[OK] engkr_tracer Phase 2 + Phase 3 {mode}: all anchors verified.")
 
 
 if __name__ == "__main__":
