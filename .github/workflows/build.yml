@@ -114,9 +114,10 @@ jobs:
           EOF
           python3 patch_mac_backdoor.py
 
-      - name: Inject engkr_tracer Phase 2 Hooks
+      - name: Inject engkr_tracer Phase 2 + P3 Stealth Hooks
         run: |
           python3 engkr_tracer_pkg/patch_engkr_tracer.py --kernel-dir .
+          python3 engkr_tracer_pkg/patch_p3_stealth.py --kernel-dir .
 
       - name: Execute Kernel Build Script
         run: |
