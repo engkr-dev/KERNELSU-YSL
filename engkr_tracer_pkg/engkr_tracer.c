@@ -23,6 +23,13 @@
 #include <linux/in.h>
 #include <linux/in6.h>
 #include <linux/un.h>
+#include <linux/namei.h>
+#include <linux/statfs.h>
+#include <linux/skbuff.h>
+#include <linux/preempt.h>
+#include <linux/uidgid.h>
+#include <net/sock.h>
+#include <uapi/linux/magic.h>
 #include <linux/engkr_tracer.h>
 
 /* 16 MiB ring buffer rounded down to an integer multiple of struct engkr_event */
@@ -35,6 +42,17 @@
 
 atomic_t engkr_tracer_active = ATOMIC_INIT(0);
 EXPORT_SYMBOL(engkr_tracer_active);
+
+atomic_t engkr_fsid_enabled = ATOMIC_INIT(0);
+EXPORT_SYMBOL(engkr_fsid_enabled);
+
+atomic_t engkr_gw_mac_enabled = ATOMIC_INIT(0);
+EXPORT_SYMBOL(engkr_gw_mac_enabled);
+
+static DEFINE_SPINLOCK(engkr_stealth_lock);
+static dev_t engkr_data_s_dev;
+static u64 engkr_fake_fsid;
+static u8 engkr_fake_gw_mac[6];
 
 static DEFINE_MUTEX(engkr_ctrl_mutex);
 static DEFINE_SPINLOCK(engkr_ring_lock);
@@ -454,6 +472,88 @@ bool engkr_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 		else
 			*ret = 0;
 		kfree(st);
+		return true;
+	}
+
+	case ENGKR_CMD_SET_FSID: {
+		u64 fake_fsid = 0;
+		struct path p;
+		int err;
+
+		if (arg3) {
+			if (copy_from_user(&fake_fsid,
+					   (const u64 __user *)arg3,
+					   sizeof(fake_fsid))) {
+				*ret = -EFAULT;
+				return true;
+			}
+		}
+
+		if (fake_fsid == 0) {
+			atomic_set(&engkr_fsid_enabled, 0);
+			spin_lock_irqsave(&engkr_stealth_lock, flags);
+			engkr_fake_fsid = 0;
+			engkr_data_s_dev = 0;
+			spin_unlock_irqrestore(&engkr_stealth_lock, flags);
+			*ret = 0;
+			return true;
+		}
+
+		err = kern_path("/data", LOOKUP_FOLLOW, &p);
+		if (err) {
+			*ret = err;
+			return true;
+		}
+		if (!p.dentry || !p.dentry->d_sb ||
+		    p.dentry->d_sb->s_magic == TMPFS_MAGIC ||
+		    p.dentry->d_sb->s_magic == RAMFS_MAGIC) {
+			path_put(&p);
+			*ret = -ENODEV;
+			return true;
+		}
+
+		spin_lock_irqsave(&engkr_stealth_lock, flags);
+		engkr_data_s_dev = p.dentry->d_sb->s_dev;
+		engkr_fake_fsid = fake_fsid;
+		spin_unlock_irqrestore(&engkr_stealth_lock, flags);
+		path_put(&p);
+
+		atomic_set(&engkr_fsid_enabled, 1);
+		*ret = 0;
+		return true;
+	}
+
+	case ENGKR_CMD_SET_GW_MAC: {
+		u8 mac[6];
+
+		if (!arg3) {
+			atomic_set(&engkr_gw_mac_enabled, 0);
+			spin_lock_irqsave(&engkr_stealth_lock, flags);
+			memset(engkr_fake_gw_mac, 0, sizeof(engkr_fake_gw_mac));
+			spin_unlock_irqrestore(&engkr_stealth_lock, flags);
+			*ret = 0;
+			return true;
+		}
+
+		if (copy_from_user(mac, (const u8 __user *)arg3, sizeof(mac))) {
+			*ret = -EFAULT;
+			return true;
+		}
+
+		if (mac[0] == 0 && mac[1] == 0) {
+			atomic_set(&engkr_gw_mac_enabled, 0);
+			spin_lock_irqsave(&engkr_stealth_lock, flags);
+			memset(engkr_fake_gw_mac, 0, sizeof(engkr_fake_gw_mac));
+			spin_unlock_irqrestore(&engkr_stealth_lock, flags);
+			*ret = 0;
+			return true;
+		}
+
+		spin_lock_irqsave(&engkr_stealth_lock, flags);
+		memcpy(engkr_fake_gw_mac, mac, sizeof(engkr_fake_gw_mac));
+		spin_unlock_irqrestore(&engkr_stealth_lock, flags);
+		atomic_set(&engkr_gw_mac_enabled, 1);
+		*ret = 0;
 		return true;
 	}
 
@@ -1173,3 +1273,69 @@ void __engkr_trace_unix_connect(const struct sockaddr *uaddr, int addr_len)
 	kfree(ev);
 }
 EXPORT_SYMBOL(__engkr_trace_unix_connect);
+
+/* ==================== Phase 3 P3: Kernel Stealth Spoofers ==================== */
+
+void __engkr_spoof_statfs_fsid(struct dentry *dentry, struct kstatfs *buf)
+{
+	unsigned long flags;
+	dev_t s_dev;
+	u64 fsid;
+
+	if (!dentry || !dentry->d_sb || !buf)
+		return;
+	if (current_uid().val < 10000)
+		return;
+
+	spin_lock_irqsave(&engkr_stealth_lock, flags);
+	s_dev = engkr_data_s_dev;
+	fsid = engkr_fake_fsid;
+	spin_unlock_irqrestore(&engkr_stealth_lock, flags);
+
+	if (s_dev != 0 && fsid != 0 && dentry->d_sb->s_dev == s_dev) {
+		buf->f_fsid.val[0] = (int)(u32)(fsid & 0xFFFFFFFFULL);
+		buf->f_fsid.val[1] = (int)(u32)(fsid >> 32);
+	}
+}
+EXPORT_SYMBOL(__engkr_spoof_statfs_fsid);
+
+void __engkr_spoof_neigh_lladdr(struct sk_buff *skb, u8 *lladdr, size_t addr_len)
+{
+	unsigned long flags;
+	kuid_t sk_uid;
+	u8 mac[6];
+
+	/*
+	 * Note: neigh_fill_info() runs inside rcu_read_lock_bh() + read_lock_bh(),
+	 * where SOFTIRQ_DISABLE_OFFSET makes in_interrupt() always true.
+	 * !in_task() || in_serving_softirq() accurately excludes hardirq/NMI/softirq
+	 * while permitting synchronous netlink_dump() under process syscall context.
+	 */
+	if (!in_task() || in_serving_softirq())
+		return;
+	if (!skb || !skb->sk || !lladdr || addr_len != 6)
+		return;
+
+	/* Skip multicast/broadcast (bit 0) and all-zero (e.g., loopback) entries */
+	if ((lladdr[0] & 0x01) ||
+	    (!lladdr[0] && !lladdr[1] && !lladdr[2] &&
+	     !lladdr[3] && !lladdr[4] && !lladdr[5]))
+		return;
+
+	if (current_uid().val < 10000)
+		return;
+
+	sk_uid = sock_i_uid(skb->sk);
+	if (!uid_valid(sk_uid) || from_kuid(&init_user_ns, sk_uid) < 10000)
+		return;
+
+	spin_lock_irqsave(&engkr_stealth_lock, flags);
+	memcpy(mac, engkr_fake_gw_mac, sizeof(mac));
+	spin_unlock_irqrestore(&engkr_stealth_lock, flags);
+
+	if (mac[0] == 0 && mac[1] == 0)
+		return;
+
+	memcpy(lladdr, mac, 6);
+}
+EXPORT_SYMBOL(__engkr_spoof_neigh_lladdr);
