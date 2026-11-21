@@ -11,6 +11,7 @@
 typedef uint64_t u64;
 typedef uint32_t u32;
 typedef uint16_t u16;
+typedef uint8_t u8;
 typedef int32_t s32;
 #endif
 
@@ -27,6 +28,8 @@ typedef int32_t s32;
 #define ENGKR_CMD_MARKER	7
 #define ENGKR_CMD_READ_RING	8
 #define ENGKR_CMD_GET_STATS	9
+#define ENGKR_CMD_SET_FSID	10
+#define ENGKR_CMD_SET_GW_MAC	11
 
 #define ENGKR_MAX_UIDS		8
 #define ENGKR_PKG_MAX		128
@@ -99,11 +102,15 @@ struct engkr_stats {
 struct file;
 struct path;
 struct dentry;
+struct kstatfs;
+struct sk_buff;
 struct task_struct;
 struct sockaddr;
 struct in6_addr;
 
 extern atomic_t engkr_tracer_active;
+extern atomic_t engkr_fsid_enabled;
+extern atomic_t engkr_gw_mac_enabled;
 
 static inline bool engkr_tracer_is_active(void)
 {
@@ -115,6 +122,10 @@ bool engkr_is_current_uid_tracked(void);
 /* Control interface (always callable even when inactive) */
 bool engkr_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 			unsigned long arg4, unsigned long arg5, long *ret);
+
+/* Phase 3 P3 out-of-line kernel stealth spoofers */
+void __engkr_spoof_statfs_fsid(struct dentry *dentry, struct kstatfs *buf);
+void __engkr_spoof_neigh_lladdr(struct sk_buff *skb, u8 *lladdr, size_t addr_len);
 
 /* Phase 2 out-of-line hook implementations */
 void __engkr_trace_chown(const struct path *path, uid_t user, int error);
@@ -332,6 +343,23 @@ static inline void engkr_trace_unix_connect(const struct sockaddr *uaddr,
 	if (likely(!atomic_read(&engkr_tracer_active)))
 		return;
 	__engkr_trace_unix_connect(uaddr, addr_len);
+}
+
+/* Single-instruction fast-path inline wrappers (Phase 3 P3 Kernel Stealth) */
+static inline void engkr_spoof_statfs_fsid(struct dentry *dentry,
+					   struct kstatfs *buf)
+{
+	if (likely(!atomic_read(&engkr_fsid_enabled)))
+		return;
+	__engkr_spoof_statfs_fsid(dentry, buf);
+}
+
+static inline void engkr_spoof_neigh_lladdr(struct sk_buff *skb, u8 *lladdr,
+					    size_t addr_len)
+{
+	if (likely(!atomic_read(&engkr_gw_mac_enabled)))
+		return;
+	__engkr_spoof_neigh_lladdr(skb, lladdr, addr_len);
 }
 
 #endif /* __KERNEL__ */
