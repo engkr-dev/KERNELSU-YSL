@@ -218,8 +218,88 @@ static void usage(const char *prog)
 		"  stop                   Disable tracing\n"
 		"  reset                  Clear ring buffer and counters\n"
 		"  marker <text>          Emit EVT_MARKER into ring buffer\n"
-		"  stream [output.jsonl]  Stream events as JSONL (Ctrl-C to stop)\n",
+		"  stream [output.jsonl]  Stream events as JSONL (Ctrl-C to stop)\n"
+		"  set-fsid <hex16|0>     Set spoofed /data STATFS f_fsid (0 to disable)\n"
+		"  set-gw-mac <mac|off>   Set spoofed RTM_GETNEIGH gateway MAC ('off' to disable)\n",
 		prog, ENGKR_MAX_UIDS);
+}
+
+static int cmd_set_fsid(const char *arg)
+{
+	char *endp = NULL;
+	uint64_t fsid;
+
+	if (!arg || !arg[0]) {
+		fprintf(stderr, "[-] Invalid empty fsid\n");
+		return 1;
+	}
+	if (strcmp(arg, "off") == 0 || strcmp(arg, "0") == 0) {
+		fsid = 0;
+	} else {
+		errno = 0;
+		fsid = (uint64_t)strtoull(arg, &endp, 16);
+		if (errno != 0 || !endp || *endp != '\0') {
+			fprintf(stderr, "[-] Invalid hex fsid: %s\n", arg);
+			return 1;
+		}
+	}
+
+	if (engkr_prctl(ENGKR_CMD_SET_FSID, (unsigned long)&fsid, 0, 0) < 0) {
+		perror("ENGKR_CMD_SET_FSID");
+		return 1;
+	}
+	if (fsid == 0)
+		printf("[+] /data STATFS f_fsid spoofing disabled\n");
+	else
+		printf("[+] /data STATFS f_fsid spoof set to: %016llx\n",
+		       (unsigned long long)fsid);
+	return 0;
+}
+
+static int cmd_set_gw_mac(const char *arg)
+{
+	unsigned int b[6];
+	uint8_t mac[6];
+	int i;
+
+	if (!arg || !arg[0]) {
+		fprintf(stderr, "[-] Invalid empty MAC\n");
+		return 1;
+	}
+	if (strcmp(arg, "off") == 0 || strcmp(arg, "0") == 0) {
+		memset(mac, 0, sizeof(mac));
+		if (engkr_prctl(ENGKR_CMD_SET_GW_MAC, (unsigned long)mac, 0, 0) < 0) {
+			perror("ENGKR_CMD_SET_GW_MAC");
+			return 1;
+		}
+		printf("[+] RTM_GETNEIGH gateway MAC spoofing disabled\n");
+		return 0;
+	}
+
+	if (sscanf(arg, "%x:%x:%x:%x:%x:%x",
+		   &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) != 6) {
+		fprintf(stderr, "[-] Invalid MAC format (expected aa:bb:cc:dd:ee:ff): %s\n", arg);
+		return 1;
+	}
+	for (i = 0; i < 6; i++) {
+		if (b[i] > 0xFF) {
+			fprintf(stderr, "[-] MAC octet out of range: %s\n", arg);
+			return 1;
+		}
+		mac[i] = (uint8_t)b[i];
+	}
+	if (mac[0] == 0 && mac[1] == 0) {
+		fprintf(stderr, "[-] Rejecting zero-prefix MAC (reserves disable sentinel): %s\n", arg);
+		return 1;
+	}
+
+	if (engkr_prctl(ENGKR_CMD_SET_GW_MAC, (unsigned long)mac, 0, 0) < 0) {
+		perror("ENGKR_CMD_SET_GW_MAC");
+		return 1;
+	}
+	printf("[+] RTM_GETNEIGH gateway MAC spoof set to: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+	return 0;
 }
 
 int main(int argc, char **argv)
@@ -284,6 +364,10 @@ int main(int argc, char **argv)
 		return 0;
 	} else if (strcmp(argv[1], "stream") == 0) {
 		return cmd_stream(argc >= 3 ? argv[2] : NULL);
+	} else if (strcmp(argv[1], "set-fsid") == 0 && argc >= 3) {
+		return cmd_set_fsid(argv[2]);
+	} else if (strcmp(argv[1], "set-gw-mac") == 0 && argc >= 3) {
+		return cmd_set_gw_mac(argv[2]);
 	}
 
 	usage(argv[0]);
