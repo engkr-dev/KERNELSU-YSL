@@ -1299,9 +1299,37 @@ void __engkr_spoof_statfs_fsid(struct dentry *dentry, struct kstatfs *buf)
 }
 EXPORT_SYMBOL(__engkr_spoof_statfs_fsid);
 
-void __engkr_spoof_neigh_lladdr(struct sk_buff *skb, u8 *lladdr, size_t addr_len)
+static bool engkr_copy_fake_gw_mac(const u8 *orig_lladdr, size_t addr_len,
+				   u8 *out_mac)
 {
 	unsigned long flags;
+	u8 mac[6];
+
+	if (!orig_lladdr || !out_mac || addr_len != 6)
+		return false;
+
+	/* Skip multicast/broadcast (bit 0) and all-zero (e.g., loopback) entries */
+	if ((orig_lladdr[0] & 0x01) ||
+	    (!orig_lladdr[0] && !orig_lladdr[1] && !orig_lladdr[2] &&
+	     !orig_lladdr[3] && !orig_lladdr[4] && !orig_lladdr[5]))
+		return false;
+
+	if (current_uid().val < 10000)
+		return false;
+
+	spin_lock_irqsave(&engkr_stealth_lock, flags);
+	memcpy(mac, engkr_fake_gw_mac, sizeof(mac));
+	spin_unlock_irqrestore(&engkr_stealth_lock, flags);
+
+	if (mac[0] == 0 && mac[1] == 0)
+		return false;
+
+	memcpy(out_mac, mac, 6);
+	return true;
+}
+
+void __engkr_spoof_neigh_lladdr(struct sk_buff *skb, u8 *lladdr, size_t addr_len)
+{
 	kuid_t sk_uid;
 	u8 mac[6];
 
@@ -1313,29 +1341,47 @@ void __engkr_spoof_neigh_lladdr(struct sk_buff *skb, u8 *lladdr, size_t addr_len
 	 */
 	if (!in_task() || in_serving_softirq())
 		return;
-	if (!skb || !skb->sk || !lladdr || addr_len != 6)
-		return;
-
-	/* Skip multicast/broadcast (bit 0) and all-zero (e.g., loopback) entries */
-	if ((lladdr[0] & 0x01) ||
-	    (!lladdr[0] && !lladdr[1] && !lladdr[2] &&
-	     !lladdr[3] && !lladdr[4] && !lladdr[5]))
-		return;
-
-	if (current_uid().val < 10000)
+	if (!skb || !skb->sk)
 		return;
 
 	sk_uid = sock_i_uid(skb->sk);
 	if (!uid_valid(sk_uid) || from_kuid(&init_user_ns, sk_uid) < 10000)
 		return;
 
-	spin_lock_irqsave(&engkr_stealth_lock, flags);
-	memcpy(mac, engkr_fake_gw_mac, sizeof(mac));
-	spin_unlock_irqrestore(&engkr_stealth_lock, flags);
-
-	if (mac[0] == 0 && mac[1] == 0)
+	if (!engkr_copy_fake_gw_mac(lladdr, addr_len, mac))
 		return;
 
 	memcpy(lladdr, mac, 6);
 }
 EXPORT_SYMBOL(__engkr_spoof_neigh_lladdr);
+
+void __engkr_spoof_arp_raw(u8 *lladdr, size_t addr_len)
+{
+	u8 mac[6];
+
+	if (!in_task() || in_serving_softirq())
+		return;
+
+	if (!engkr_copy_fake_gw_mac(lladdr, addr_len, mac))
+		return;
+
+	memcpy(lladdr, mac, 6);
+}
+EXPORT_SYMBOL(__engkr_spoof_arp_raw);
+
+void __engkr_spoof_arp_hbuf(const u8 *orig_ha, char *hbuffer, size_t hbuf_len)
+{
+	u8 mac[6];
+
+	if (!hbuffer || hbuf_len < 18)
+		return;
+	if (!in_task() || in_serving_softirq())
+		return;
+
+	if (!engkr_copy_fake_gw_mac(orig_ha, 6, mac))
+		return;
+
+	snprintf(hbuffer, hbuf_len, "%02x:%02x:%02x:%02x:%02x:%02x",
+		 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+EXPORT_SYMBOL(__engkr_spoof_arp_hbuf);
