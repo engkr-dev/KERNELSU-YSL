@@ -8,6 +8,8 @@ Scope:
   3. fs/susfs.c       : Auto-populate info.flags when 0, bind real inode->i_ino as target_ino,
                         hash by new_entry->target_ino, and verify entry->target_ino == target_ino
   4. net/core/neighbour.c : RTM_GETNEIGH NDA_LLADDR gateway MAC spoofing via engkr_spoof_neigh_lladdr()
+  5. fs/fs-writeback.c    : Widen `dirty` from `unsigned` (32-bit) to `unsigned long` (64-bit) so `~dirty` does not zero-extend and clear upper SUSFS bits (33..39) in `inode->i_state`
+  6. net/ipv4/arp.c       : Spoof `/proc/net/arp` & `SIOCGARP` gateway MAC to match `FAKE_GW_MAC` for `uid >= 10000`
 """
 
 import argparse
@@ -343,6 +345,101 @@ def main():
                 "\t\tif (nla_put(skb, NDA_LLADDR, neigh->dev->addr_len, haddr) < 0) {\n",
                 "engkr_spoof_neigh_lladdr(",
                 "neigh_fill_info",
+            ),
+        ],
+        args.dry_run,
+        add_include=True,
+    )
+
+    # 5. fs/fs-writeback.c -> preserve upper 64-bit SUSFS AS_FLAGS_* bits in inode->i_state during writeback
+    patch_file(
+        kernel_dir,
+        "fs/fs-writeback.c",
+        [
+            (
+                "__writeback_single_inode(struct inode *inode, struct writeback_control *wbc)\n"
+                "{\n"
+                "\tstruct address_space *mapping = inode->i_mapping;\n"
+                "\tlong nr_to_write = wbc->nr_to_write;\n"
+                "\tunsigned dirty;\n"
+                "\tint ret;\n",
+                "__writeback_single_inode(struct inode *inode, struct writeback_control *wbc)\n"
+                "{\n"
+                "\tstruct address_space *mapping = inode->i_mapping;\n"
+                "\tlong nr_to_write = wbc->nr_to_write;\n"
+                "\tunsigned long dirty;\n"
+                "\tint ret;\n",
+                "\tunsigned long dirty;\n\tint ret;\n\n\tWARN_ON(!(inode->i_state & I_SYNC));",
+                "writeback_dirty_64bit_preserve",
+            ),
+        ],
+        args.dry_run,
+        add_include=False,
+    )
+
+    # 6. net/ipv4/arp.c -> spoof SIOCGARP & /proc/<pid>/net/arp consistently with RTM_GETNEIGH
+    patch_file(
+        kernel_dir,
+        "net/ipv4/arp.c",
+        [
+            (
+                "\t\tif (!(neigh->nud_state & NUD_NOARP)) {\n"
+                "\t\t\tread_lock_bh(&neigh->lock);\n"
+                "\t\t\tmemcpy(r->arp_ha.sa_data, neigh->ha, dev->addr_len);\n"
+                "\t\t\tr->arp_flags = arp_state_to_flags(neigh);\n"
+                "\t\t\tread_unlock_bh(&neigh->lock);\n",
+                "\t\tif (!(neigh->nud_state & NUD_NOARP)) {\n"
+                "\t\t\tread_lock_bh(&neigh->lock);\n"
+                "\t\t\tmemcpy(r->arp_ha.sa_data, neigh->ha, dev->addr_len);\n"
+                "\t\t\tr->arp_flags = arp_state_to_flags(neigh);\n"
+                "\t\t\tread_unlock_bh(&neigh->lock);\n"
+                "\t\t\tif ((r->arp_flags & ATF_COM) && dev->addr_len == 6)\n"
+                "\t\t\t\tengkr_spoof_arp_raw((u8 *)r->arp_ha.sa_data, 6);\n",
+                "engkr_spoof_arp_raw(",
+                "arp_req_get_siocgarp",
+            ),
+            (
+                "static void arp_format_neigh_entry(struct seq_file *seq,\n"
+                "\t\t\t\t   struct neighbour *n)\n"
+                "{\n"
+                "\tchar hbuffer[HBUFFERLEN];\n"
+                "\tint k, j;\n"
+                "\tchar tbuf[16];\n"
+                "\tstruct net_device *dev = n->dev;\n"
+                "\tint hatype = dev->type;\n",
+                "static void arp_format_neigh_entry(struct seq_file *seq,\n"
+                "\t\t\t\t   struct neighbour *n)\n"
+                "{\n"
+                "\tchar hbuffer[HBUFFERLEN];\n"
+                "\tint k, j;\n"
+                "\tchar tbuf[16];\n"
+                "\tstruct net_device *dev = n->dev;\n"
+                "\tint hatype = dev->type;\n"
+                "\tu8 ha_chk[6];\n"
+                "\tint ha_len = 0;\n"
+                "\tunsigned int arp_flags;\n",
+                "\tint ha_len = 0;\n\tunsigned int arp_flags;",
+                "arp_format_neigh_entry_locals",
+            ),
+            (
+                "\tsprintf(tbuf, \"%pI4\", n->primary_key);\n"
+                "\tseq_printf(seq, \"%-16s 0x%-10x0x%-10x%-17s     *        %s\\n\",\n"
+                "\t\t   tbuf, hatype, arp_state_to_flags(n), hbuffer, dev->name);\n"
+                "\tread_unlock(&n->lock);\n",
+                "\tsprintf(tbuf, \"%pI4\", n->primary_key);\n"
+                "\tarp_flags = arp_state_to_flags(n);\n"
+                "\tif (dev->addr_len == 6 && (arp_flags & ATF_COM) &&\n"
+                "\t    hatype != ARPHRD_AX25 && hatype != ARPHRD_NETROM) {\n"
+                "\t\tmemcpy(ha_chk, n->ha, 6);\n"
+                "\t\tha_len = 6;\n"
+                "\t}\n"
+                "\tread_unlock(&n->lock);\n"
+                "\tif (ha_len == 6)\n"
+                "\t\tengkr_spoof_arp_hbuf(ha_chk, hbuffer, sizeof(hbuffer));\n"
+                "\tseq_printf(seq, \"%-16s 0x%-10x0x%-10x%-17s     *        %s\\n\",\n"
+                "\t\t   tbuf, hatype, arp_flags, hbuffer, dev->name);\n",
+                "engkr_spoof_arp_hbuf(",
+                "arp_format_neigh_entry_spoof",
             ),
         ],
         args.dry_run,
