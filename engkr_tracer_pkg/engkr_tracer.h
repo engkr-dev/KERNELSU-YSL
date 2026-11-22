@@ -126,6 +126,8 @@ bool engkr_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 /* Phase 3 P3 out-of-line kernel stealth spoofers */
 void __engkr_spoof_statfs_fsid(struct dentry *dentry, struct kstatfs *buf);
 void __engkr_spoof_neigh_lladdr(struct sk_buff *skb, u8 *lladdr, size_t addr_len);
+void __engkr_spoof_arp_raw(u8 *lladdr, size_t addr_len);
+void __engkr_spoof_arp_hbuf(const u8 *orig_ha, char *hbuffer, size_t hbuf_len);
 
 /* Phase 2 out-of-line hook implementations */
 void __engkr_trace_chown(const struct path *path, uid_t user, int error);
@@ -360,6 +362,21 @@ static inline void engkr_spoof_neigh_lladdr(struct sk_buff *skb, u8 *lladdr,
 	if (likely(!atomic_read(&engkr_gw_mac_enabled)))
 		return;
 	__engkr_spoof_neigh_lladdr(skb, lladdr, addr_len);
+}
+
+static inline void engkr_spoof_arp_raw(u8 *lladdr, size_t addr_len)
+{
+	if (likely(!atomic_read(&engkr_gw_mac_enabled)))
+		return;
+	__engkr_spoof_arp_raw(lladdr, addr_len);
+}
+
+static inline void engkr_spoof_arp_hbuf(const u8 *orig_ha, char *hbuffer,
+					size_t hbuf_len)
+{
+	if (likely(!atomic_read(&engkr_gw_mac_enabled)))
+		return;
+	__engkr_spoof_arp_hbuf(orig_ha, hbuffer, hbuf_len);
 }
 
 #endif /* __KERNEL__ */
